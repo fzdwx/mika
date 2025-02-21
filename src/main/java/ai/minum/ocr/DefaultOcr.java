@@ -11,7 +11,11 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 
 public class DefaultOcr {
@@ -70,6 +74,12 @@ public class DefaultOcr {
 
     public String doOrc(byte[] pictureData) {
         return doOrc(new ByteArrayInputStream(pictureData));
+    }
+
+    public String doOrc(BufferedImage image) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", baos);
+        return doOrc(baos.toByteArray());
     }
 }
 
