@@ -8,10 +8,11 @@ import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.graphics.PDXObject;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
-import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.pdfbox.text.PDFTextStripper;
 
+import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.List;
 
@@ -47,7 +48,12 @@ public class PDFExtract implements Extractor {
                             result.setHasImage(true);
                             if (config.ocr()) {
                                 BufferedImage image = img.getImage();
-                                String imageContent = config.getOcr().doOrc(image);
+                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                ImageIO.write(image, "png", baos);
+                                if (baos.size() > config.imageExtractMaxSize()) {
+                                    continue;
+                                }
+                                String imageContent = config.getOcr().doOrc(baos.toByteArray());
                                 content.append(imageContent);
                             }
                         }

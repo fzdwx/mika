@@ -75,12 +75,6 @@ public class DefaultOcr {
     public String doOrc(byte[] pictureData) {
         return doOrc(new ByteArrayInputStream(pictureData));
     }
-
-    public String doOrc(BufferedImage image) throws IOException {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        ImageIO.write(image, "png", baos);
-        return doOrc(baos.toByteArray());
-    }
 }
 
 @Data
