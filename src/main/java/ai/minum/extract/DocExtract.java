@@ -8,7 +8,10 @@ import org.apache.poi.hwpf.usermodel.Picture;
 import org.apache.poi.hwpf.usermodel.Range;
 
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class DocExtract implements Extractor {
@@ -46,44 +49,77 @@ public class DocExtract implements Extractor {
     public ExtractResult doExtract(ExtractConfig config, InputStream stream) throws Exception {
         HWPFDocument doc = new HWPFDocument(stream);
         ExtractResult result = ExtractResult.of();
-        PicturesTable pictures = doc.getPicturesTable();
         Range range = doc.getRange();
         int numP = range.numParagraphs();
-
-        long index = 0L;
+        List<Paragraph> paras = new ArrayList<>();
         for (int i = 0; i < numP; i++) {
-            Paragraph p = range.getParagraph(i);
-            if (p.isInTable()) {
-                result.setHasTable(true);
-            }
-
-            String content = cleanText(p.text());
-            for (int j = 0; j < p.numCharacterRuns(); j++) {
-                CharacterRun run = p.getCharacterRun(j);
-                if (!pictures.hasPicture(run) || !config.ocr()) {
-                    result.addPage(index++, content);
-                    continue;
+            paras.add(range.getParagraph(i));
+        }
+        Iterator<Paragraph> it = paras.iterator();
+        PicturesTable pictures = doc.getPicturesTable();
+        long index = 0L;
+        while (it.hasNext()) {
+            Paragraph para = it.next();
+            String content = para.text();
+            if (para.isInTable()) {
+                StringBuilder sb = new StringBuilder();
+                sb.append(removeFormText(content));
+                if (content.charAt(content.length() - 1) != '\r') {
+                    sb.append("\t");
+                } else {
+                    sb.append(" ");
                 }
-                result.setHasImage(true);
-                Picture pic = pictures.extractPicture(run, true);
-                byte[] pictureData = pic.getContent();
-                if (pictureData.length < config.imageExtractMaxSize()) {
-                    String imageContent = config.getOcr().doOrc(pictureData);
-                    if (imageContent != null && !imageContent.isEmpty()) {
-                        content = content.concat(imageContent);
+                while (it.hasNext()) {
+                    para = it.next();
+                    content = para.text();
+                    if (!para.isInTable()) {
+                        if (sb.length() > 0) {
+                            sb.setLength(sb.length() - 2);
+                        }
+                        break;
+                    }
+                    sb.append(removeFormText(content));
+                    if (para.isTableRowEnd()) {
+                        if (sb.length() > 0) {
+                            sb.setLength(sb.length() - 1);
+                        }
+                        sb.append("\n");
+                    } else {
+                        if (content.charAt(content.length() - 1) != '\r') {
+                            sb.append("\t");
+                        } else {
+                            sb.append(" ");
+                        }
                     }
                 }
+                result.setHasTable(true);
+                result.addPage(index++, sb.toString());
+                if (para.isInTable()) {
+                    continue;
+                }
+            }
+            content = pattern.matcher(content).replaceAll("").strip();
+            content = controlPattern.matcher(content).replaceAll(" ").strip();
+            for (int j = 0; j < para.numCharacterRuns(); j++) {
+                CharacterRun run = para.getCharacterRun(j);
+                if (pictures.hasPicture(run)) {
+                    result.setHasImage(true);
+                    if (!config.ocr()) {
+                        continue;
+                    }
+                    Picture pic = pictures.extractPicture(run, true);
+                    byte[] pictureData = pic.getContent();
+                    if (pictureData.length < config.imageExtractMaxSize()) {
+                        String ocrContent = config.getOcr().doOrc(pictureData);
+                        content = content.concat(ocrContent);
+                    }
+                }
+            }
+            if (!content.isEmpty()) {
                 result.addPage(index++, content);
             }
         }
         return result;
-    }
-
-    private static String cleanText(String content) {
-        content = removeFormText(content);
-        content = pattern.matcher(content).replaceAll("").strip();
-        content = controlPattern.matcher(content).replaceAll(" ").strip();
-        return content;
     }
 
     private static String removeFormText(String text) {
@@ -91,6 +127,11 @@ public class DocExtract implements Extractor {
                 .replaceAll("\t", " ")
                 .replace("\n", " ")
                 .strip();
+    }
+
+    boolean doMatch(String s, Pattern pattern) {
+        Matcher matcher = pattern.matcher(s);
+        return matcher.find();
     }
 }
 

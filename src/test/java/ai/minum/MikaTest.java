@@ -28,12 +28,12 @@ class MikaTest {
 
     @Test
     void extract() throws FileNotFoundException {
-        String path ="/home/like/桌面/Snipaste_2025-02-21_17-40-43.webp";
+        String path ="/home/like/project/data-extract/src/test/qweqweqwe.doc";
         FileInputStream stream = new FileInputStream(path);
         ExtractConfig config = ExtractConfig
                 .defaultConfig()
                 .ocrUrl("http://192.168.50.191:15234/file/ocr")
-                .ocr(true);
+                .ocr(false);
         var result = Mika.extract(new BufferedInputStream(stream), config);
         System.out.println(result);
     }
