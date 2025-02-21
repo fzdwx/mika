@@ -31,7 +31,7 @@ public class Mika {
         }
     }
 
-    public static ExtractResult extract(InputStream stream, boolean fallback) {
+    public static ExtractResult extract(InputStream stream, ExtractConfig config) {
         DetectResult detectResult = Mika.detect(stream);
         try {
             stream.reset();
@@ -40,7 +40,7 @@ public class Mika {
         }
 
         if (detectResult.isError()) {
-            if (fallback) {
+            if (config.fallback()) {
                 return doFallbackExtract(stream);
             }
             return ExtractResult.error(detectResult.getErrorMessage());
@@ -49,9 +49,9 @@ public class Mika {
         return extractors.stream()
                 .filter(extractor -> extractor.support(detectResult.getContent()))
                 .findFirst()
-                .map(extractor -> extractor.extract(ExtractConfig.defaultConfig(), stream))
+                .map(extractor -> extractor.extract(config, stream))
                 .orElseGet(() -> {
-                    if (fallback) {
+                    if (config.fallback()) {
                         return doFallbackExtract(stream);
                     }
                     return ExtractResult.error("No extractor found for " + detectResult.getContent());

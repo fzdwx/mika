@@ -1,15 +1,10 @@
 package ai.minum.extract;
 
-import com.microsoft.schemas.vml.CTShape;
 import org.apache.poi.xwpf.usermodel.*;
 import org.apache.xmlbeans.XmlCursor;
 import org.apache.xmlbeans.XmlObject;
-import org.openxmlformats.schemas.drawingml.x2006.main.CTGraphicalObject;
-import org.openxmlformats.schemas.drawingml.x2006.picture.CTPicture;
-import org.openxmlformats.schemas.drawingml.x2006.wordprocessingDrawing.CTInline;
+import org.openxmlformats.schemas.drawingml.x2006.main.CTBlip;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTDrawing;
-import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTObject;
-import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR;
 
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -77,45 +72,35 @@ public class DocxExtract implements Extractor {
     static List<String> readImageInP(XWPFParagraph paragraph) {
         // 图片索引List
         List<String> imageBundleList = new ArrayList<>();
-        // 段落中所有XWPFRun
-        List<XWPFRun> runList = paragraph.getRuns();
-        for (XWPFRun run : runList) {
-            CTR ctr = run.getCTR();
-            try (XmlCursor c = ctr.newCursor();) {
-                c.selectPath("./*");
-                while (c.toNextSelection()) {
-                    XmlObject o = c.getObject();
-                    if (o instanceof CTDrawing drawing) {
-                        CTInline[] ctInlines = drawing.getInlineArray();
-                        for (CTInline ctInline : ctInlines) {
-                            CTGraphicalObject graphic = ctInline.getGraphic();
-                            try (XmlCursor cursor = graphic.getGraphicData().newCursor();) {
-                                cursor.selectPath("./*");
-                                while (cursor.toNextSelection()) {
-                                    XmlObject xmlObject = cursor.getObject();
-                                    if (xmlObject instanceof CTPicture picture) {
-                                        imageBundleList.add(picture.getBlipFill().getBlip().getEmbed());
-                                    }
-                                }
-                            }
-                        }
-                    }
+        // 遍历段落中的每个XWPFRun
+        for (XWPFRun run : paragraph.getRuns()) {
+            // 获取当前Run中的CTDrawing数组
+            List<CTDrawing> drawings = run.getCTR().getDrawingList();
+            for (CTDrawing drawing : drawings) {
+                // 使用XmlCursor解析CTDrawing内容
+                try (XmlCursor cursor = drawing.newCursor()) {
+                    String embedId = null;
 
-                    if (o instanceof CTObject object) {
-                        System.out.println(object);
-                        try (XmlCursor w = object.newCursor();) {
-                            w.selectPath("./*");
-                            while (w.toNextSelection()) {
-                                XmlObject xmlObject = w.getObject();
-                                if (xmlObject instanceof CTShape shape) {
-                                    imageBundleList.add(shape.getImagedataArray()[0].getId2());
-                                }
-                            }
+                    // 定义XPath查找a:blip元素
+                    String xpath = "declare namespace a='http://schemas.openxmlformats.org/drawingml/2006/main' " +
+                            "declare namespace r='http://schemas.openxmlformats.org/officeDocument/2006/relationships' " +
+                            ".//a:blip";
+                    cursor.selectPath(xpath);
+
+                    // 遍历查询结果
+                    while (cursor.toNextSelection()) {
+                        XmlObject obj = cursor.getObject();
+                        if (obj instanceof CTBlip blip) {
+                            embedId = blip.getEmbed(); // 获取嵌入ID
+                            System.out.println("embedId: " + embedId);
+                            imageBundleList.add(embedId);
+                            break;
                         }
                     }
                 }
             }
         }
+
         return imageBundleList;
     }
 

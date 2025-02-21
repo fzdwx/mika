@@ -1,5 +1,6 @@
 package ai.minum;
 
+import ai.minum.extract.ExtractConfig;
 import org.apache.xmlbeans.impl.common.IOUtil;
 import org.junit.jupiter.api.Test;
 
@@ -21,9 +22,10 @@ class MikaTest {
 
     @Test
     void extract() throws FileNotFoundException {
-        String path = "/home/like/aaaaaaaaa.docx";
+        String path = "/home/like/project/mika/bbbbbbbb.docx";
         FileInputStream stream = new FileInputStream(path);
-        var result = Mika.extract(new BufferedInputStream(stream),false);
+        ExtractConfig config = ExtractConfig.defaultConfig().ocrUrl("http://192.168.50.191:15234/file/ocr");
+        var result = Mika.extract(new BufferedInputStream(stream),config);
         System.out.println(result);
     }
 }

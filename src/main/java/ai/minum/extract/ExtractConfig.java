@@ -6,14 +6,25 @@ public class ExtractConfig {
 
     // 是否提取图片
     private boolean extractImage = false;
-    // OCR路径
-    private String ocrPath;
     // 图像提取最大大小 1MB
     private int imageExtractMaxSize = 1024 * 1024;
+    // OCR 实例
     private DefaultOcr ocr;
+
+    // 是否回退，使用 tika 纯文本提取
+    private boolean fallback = true;
 
     public static ExtractConfig defaultConfig() {
         return new ExtractConfig();
+    }
+
+    public boolean fallback() {
+        return fallback;
+    }
+
+    public ExtractConfig fallback(boolean fallback) {
+        this.fallback = fallback;
+        return this;
     }
 
     public boolean extractImage() {
@@ -26,6 +37,7 @@ public class ExtractConfig {
     }
 
     public ExtractConfig ocrUrl(String ocrUrl) {
+        this.extractImage = true;
         this.ocr = DefaultOcr.of(ocrUrl);
         return this;
     }
