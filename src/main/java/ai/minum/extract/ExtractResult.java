@@ -39,6 +39,9 @@ public class ExtractResult {
         return success(List.of(page));
     }
 
+    public String getErrorMessage() {
+        return errorMessage;
+    }
 
     public boolean isError() {
         return !success;
