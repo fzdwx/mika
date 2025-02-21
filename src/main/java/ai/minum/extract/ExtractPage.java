@@ -14,6 +14,10 @@ public class ExtractPage {
         return new ExtractPage(content, 0L);
     }
 
+    public static ExtractPage of(Long pageID, String content) {
+        return new ExtractPage(content, pageID);
+    }
+
     @Override
     public String toString() {
         return "ExtractPage{" +
