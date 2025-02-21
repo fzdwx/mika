@@ -47,6 +47,14 @@ public class ExtractResult {
         return !success;
     }
 
+    public boolean hasImage() {
+        return hasImage;
+    }
+
+    public boolean hasTable() {
+        return hasTable;
+    }
+
     public ExtractResult setHasImage(boolean hasImage) {
         this.hasImage = hasImage;
         return this;
