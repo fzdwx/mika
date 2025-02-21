@@ -25,4 +25,12 @@ public class ExtractPage {
                 ", content='" + content + '\'' +
                 '}';
     }
+
+    public Long getPage() {
+        return page;
+    }
+
+    public String getContent() {
+        return content;
+    }
 }

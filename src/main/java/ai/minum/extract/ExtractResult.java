@@ -43,6 +43,10 @@ public class ExtractResult {
         return errorMessage;
     }
 
+    public List<ExtractPage> getPages() {
+        return pages;
+    }
+
     public boolean isError() {
         return !success;
     }

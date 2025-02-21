@@ -77,7 +77,6 @@ public class DefaultOcr {
     }
 }
 
-@Data
 class OcrResult {
     int code;
     String message;
@@ -85,5 +84,29 @@ class OcrResult {
 
     public static OcrResult from(String s) {
         return JSONUtil.toBean(s, OcrResult.class);
+    }
+
+    public int getCode() {
+        return code;
+    }
+
+    public void setCode(int code) {
+        this.code = code;
+    }
+
+    public String getMessage() {
+        return message;
+    }
+
+    public void setMessage(String message) {
+        this.message = message;
+    }
+
+    public String getData() {
+        return data;
+    }
+
+    public void setData(String data) {
+        this.data = data;
     }
 }
