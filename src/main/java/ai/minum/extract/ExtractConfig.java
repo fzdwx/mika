@@ -27,11 +27,11 @@ public class ExtractConfig {
         return this;
     }
 
-    public boolean extractImage() {
+    public boolean ocr() {
         return extractImage;
     }
 
-    public ExtractConfig extractImage(boolean extractImage) {
+    public ExtractConfig ocr(boolean extractImage) {
         this.extractImage = extractImage;
         return this;
     }
@@ -42,7 +42,7 @@ public class ExtractConfig {
         return this;
     }
 
-    public DefaultOcr ocr() {
+    public DefaultOcr getOcr() {
         return ocr;
     }
 

@@ -33,7 +33,7 @@ public class DocxExtract implements Extractor {
                 if (!images.isEmpty()) {
                     result.setHasImage(true);
                 }
-                if (config.extractImage()) {
+                if (config.ocr()) {
                     List<String> imageContentList = doOcr(config, docx, images);
                     content = content.concat(String.join("\n", imageContentList));
                 }
@@ -59,7 +59,7 @@ public class DocxExtract implements Extractor {
             XWPFPictureData pic = docx.getPictureDataByID(imageId);
             byte[] pictureData = pic.getData();
             if (pictureData.length < config.imageExtractMaxSize()) {
-                String imageContent = config.ocr().doOrc(pictureData);
+                String imageContent = config.getOcr().doOrc(pictureData);
                 if (imageContent != null && !imageContent.isEmpty()) {
                     result.add(imageContent);
                 }
@@ -79,7 +79,7 @@ public class DocxExtract implements Extractor {
             for (CTDrawing drawing : drawings) {
                 // 使用XmlCursor解析CTDrawing内容
                 try (XmlCursor cursor = drawing.newCursor()) {
-                    String embedId = null;
+                    String embedId;
 
                     // 定义XPath查找a:blip元素
                     String xpath = "declare namespace a='http://schemas.openxmlformats.org/drawingml/2006/main' " +
@@ -92,7 +92,6 @@ public class DocxExtract implements Extractor {
                         XmlObject obj = cursor.getObject();
                         if (obj instanceof CTBlip blip) {
                             embedId = blip.getEmbed(); // 获取嵌入ID
-                            System.out.println("embedId: " + embedId);
                             imageBundleList.add(embedId);
                             break;
                         }
