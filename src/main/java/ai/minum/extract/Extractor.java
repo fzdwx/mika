@@ -35,11 +35,14 @@ public interface Extractor {
 
         String imageContent = config.getOcr().doOrc(result.getData());
         String content = "\n[Image";
+        String imageKey = "";
         if (config.uploadImage() && config.imageUploader() != null) {
-            String imageKey = config.imageUploader().upload(result);
-            if (!Strings.isEmpty(imageKey)) {
-                content.concat("](").concat(imageKey).concat(")");
-            }
+            imageKey = config.imageUploader().upload(result);
+        }
+        if (!Strings.isEmpty(imageKey)) {
+            content = content.concat("](").concat(imageKey).concat(")");
+        } else {
+            content = content.concat("]");
         }
         return content.concat(imageContent);
     }
