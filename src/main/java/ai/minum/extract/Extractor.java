@@ -1,6 +1,5 @@
 package ai.minum.extract;
 
-import com.rometools.utils.Strings;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.poi.hwpf.usermodel.Picture;
 import org.apache.poi.xwpf.usermodel.XWPFPictureData;
@@ -21,10 +20,6 @@ public interface Extractor {
     ExtractResult doExtract(ExtractConfig config, InputStream stream) throws Exception;
 
     default String extractImage(ExtractConfig config, ImageResult result) throws Exception {
-        if (!config.ocr()) {
-            return "";
-        }
-
         if (result.length() > config.imageExtractMaxSize()) {
             return "";
         }
@@ -36,10 +31,11 @@ public interface Extractor {
         }
 
 
-        String imageContent = config.getOcr().doOrc(result.getData());
-        if (imageContent == null || imageContent.isEmpty() || Strings.isBlank(imageContent)) {
-            return "";
+        String imageContent = "";
+        if (config.ocr()) {
+            imageContent = config.getOcr().doOrc(result.getData());
         }
+
         String content = "\n[Image";
         String imageKey = "";
         if (config.uploadImage() && config.imageUploader() != null) {

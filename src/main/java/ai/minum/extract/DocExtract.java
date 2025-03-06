@@ -104,9 +104,6 @@ public class DocExtract implements Extractor {
                 CharacterRun run = para.getCharacterRun(j);
                 if (pictures.hasPicture(run)) {
                     result.setHasImage(true);
-                    if (!config.ocr()) {
-                        continue;
-                    }
                     Picture pic = pictures.extractPicture(run, true);
                     String imageOcrContent = this.extractImage(config, toImageResult(pic));
                     content = content.concat(imageOcrContent);

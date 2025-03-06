@@ -33,10 +33,8 @@ public class DocxExtract implements Extractor {
                 if (!images.isEmpty()) {
                     result.setHasImage(true);
                 }
-                if (config.ocr()) {
-                    List<String> imageContentList = doOcr(config, docx, images);
-                    content = content.concat(String.join("\n", imageContentList));
-                }
+                List<String> imageContentList = doOcr(config, docx, images);
+                content = content.concat(String.join("\n", imageContentList));
                 if (!content.isEmpty()) {
                     result.addPage(index++, content);
                 }
