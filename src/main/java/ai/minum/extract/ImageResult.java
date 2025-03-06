@@ -4,7 +4,6 @@ import lombok.Data;
 import lombok.Getter;
 import org.apache.poi.hwpf.usermodel.PictureType;
 
-@Data
 public class ImageResult {
     private byte[] data;
     private Format mimeType;
@@ -19,6 +18,14 @@ public class ImageResult {
 
     public int length() {
         return data.length;
+    }
+
+    public Format getMimeType() {
+        return mimeType;
+    }
+
+    public byte[] getData() {
+        return data;
     }
 
     @Getter
