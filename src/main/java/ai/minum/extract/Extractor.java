@@ -1,5 +1,6 @@
 package ai.minum.extract;
 
+import com.rometools.utils.Strings;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.poi.hwpf.usermodel.Picture;
 import org.apache.poi.xwpf.usermodel.XWPFPictureData;
@@ -33,7 +34,7 @@ public interface Extractor {
         }
 
         String imageContent = config.getOcr().doOrc(result.getData());
-        if (imageContent == null || imageContent.isEmpty()) {
+        if (imageContent == null || imageContent.isEmpty() || Strings.isBlank(imageContent)) {
             return "";
         }
         String content = "\n[Image";
