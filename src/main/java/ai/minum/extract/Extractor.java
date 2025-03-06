@@ -1,6 +1,5 @@
 package ai.minum.extract;
 
-import com.rometools.utils.Strings;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.poi.hwpf.usermodel.Picture;
 import org.apache.poi.xwpf.usermodel.XWPFPictureData;
@@ -39,7 +38,7 @@ public interface Extractor {
         if (config.uploadImage() && config.imageUploader() != null) {
             imageKey = config.imageUploader().upload(result);
         }
-        if (!Strings.isEmpty(imageKey)) {
+        if (!imageKey.isEmpty()) {
             content = content.concat("](").concat(imageKey).concat(")");
         } else {
             content = content.concat("]");
