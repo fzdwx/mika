@@ -38,11 +38,9 @@ public class DefaultOcr {
             response = httpClient.execute(upload);
             HttpEntity responseEntity = response.getEntity();
             if (responseEntity != null) {
-                String content = "\n[Image]";
                 String responseString = EntityUtils.toString(responseEntity);
                 OcrResult result = OcrResult.from(responseString);
-                content = content + result.getData();
-                return content;
+                return  result.getData();
             }
         } catch (Exception e) {
             throw new RuntimeException(e);

@@ -10,10 +10,6 @@ import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.text.PDFTextStripper;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 
@@ -48,12 +44,9 @@ public class PDFExtract implements Extractor {
                         if (pdxObject instanceof PDImageXObject img) {
                             result.setHasImage(true);
                             if (config.ocr()) {
-                                byte[] bytes = toByteArray(img);
-                                if (bytes.length > config.imageExtractMaxSize()) {
-                                    continue;
-                                }
-                                String imageContent = config.getOcr().doOrc(bytes);
-                                content.append(imageContent);
+                                ImageResult imageResult = toImageResult(img);
+                                String imageOcrResult = this.extractImage(config, imageResult);
+                                content.append(imageOcrResult);
                             }
                         }
 
@@ -67,13 +60,5 @@ public class PDFExtract implements Extractor {
             }
         }
         return result;
-    }
-
-    // 20869
-    public byte[] toByteArray(PDImageXObject img) throws IOException {
-        BufferedImage image = img.getImage();
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        ImageIO.write(image, "bmp", baos);
-        return baos.toByteArray();
     }
 }

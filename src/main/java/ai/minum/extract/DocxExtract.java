@@ -53,17 +53,12 @@ public class DocxExtract implements Extractor {
         return result;
     }
 
-    private List<String> doOcr(ExtractConfig config, XWPFDocument docx, List<String> images) {
+    private List<String> doOcr(ExtractConfig config, XWPFDocument docx, List<String> images) throws Exception {
         List<String> result = new ArrayList<>();
         for (String imageId : images) {
             XWPFPictureData pic = docx.getPictureDataByID(imageId);
-            byte[] pictureData = pic.getData();
-            if (pictureData.length < config.imageExtractMaxSize()) {
-                String imageContent = config.getOcr().doOrc(pictureData);
-                if (imageContent != null && !imageContent.isEmpty()) {
-                    result.add(imageContent);
-                }
-            }
+            String imageOcrResult = this.extractImage(config, this.toImageResult(pic));
+            result.add(imageOcrResult);
         }
 
         return result;

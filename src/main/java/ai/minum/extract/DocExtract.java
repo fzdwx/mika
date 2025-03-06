@@ -73,14 +73,14 @@ public class DocExtract implements Extractor {
                     para = it.next();
                     content = para.text();
                     if (!para.isInTable()) {
-                        if (sb.length() > 0) {
+                        if (!sb.isEmpty()) {
                             sb.setLength(sb.length() - 2);
                         }
                         break;
                     }
                     sb.append(removeFormText(content));
                     if (para.isTableRowEnd()) {
-                        if (sb.length() > 0) {
+                        if (!sb.isEmpty()) {
                             sb.setLength(sb.length() - 1);
                         }
                         sb.append("\n");
@@ -108,11 +108,8 @@ public class DocExtract implements Extractor {
                         continue;
                     }
                     Picture pic = pictures.extractPicture(run, true);
-                    byte[] pictureData = pic.getContent();
-                    if (pictureData.length < config.imageExtractMaxSize()) {
-                        String ocrContent = config.getOcr().doOrc(pictureData);
-                        content = content.concat(ocrContent);
-                    }
+                    String imageOcrContent = this.extractImage(config, toImageResult(pic));
+                    content = content.concat(imageOcrContent);
                 }
             }
             if (!content.isEmpty()) {

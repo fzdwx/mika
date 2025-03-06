@@ -14,6 +14,9 @@ public class ExtractConfig {
     // 是否回退，使用 tika 纯文本提取
     private boolean fallback = true;
 
+    private ImageUploader imageUploader;
+    private boolean uploadImage = false;
+
     public static ExtractConfig defaultConfig() {
         return new ExtractConfig();
     }
@@ -24,6 +27,25 @@ public class ExtractConfig {
 
     public ExtractConfig fallback(boolean fallback) {
         this.fallback = fallback;
+        return this;
+    }
+
+    public boolean uploadImage() {
+        return uploadImage;
+    }
+
+    public ExtractConfig uploadImage(boolean uploadImage) {
+        this.uploadImage = uploadImage;
+        return this;
+    }
+
+    public ImageUploader imageUploader() {
+        return imageUploader;
+    }
+
+    public ExtractConfig imageUploader(ImageUploader imageUploader) {
+        this.imageUploader = imageUploader;
+        this.uploadImage = true;
         return this;
     }
 
