@@ -29,9 +29,12 @@ public interface Extractor {
             return "";
         }
 
-        if (ImageResult.Format.UNKNOWN == result.getMimeType()) {
+        if (ImageResult.Format.UNKNOWN == result.getMimeType()
+                || ImageResult.Format.TIFF == result.getMimeType()
+        ) {
             return "";
         }
+
 
         String imageContent = config.getOcr().doOrc(result.getData());
         if (imageContent == null || imageContent.isEmpty() || Strings.isBlank(imageContent)) {
