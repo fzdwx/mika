@@ -33,6 +33,9 @@ public interface Extractor {
         }
 
         String imageContent = config.getOcr().doOrc(result.getData());
+        if (imageContent == null || imageContent.isEmpty()) {
+            return "";
+        }
         String content = "\n[Image";
         String imageKey = "";
         if (config.uploadImage() && config.imageUploader() != null) {
