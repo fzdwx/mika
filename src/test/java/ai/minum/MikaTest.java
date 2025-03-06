@@ -8,7 +8,7 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.junit.jupiter.api.Test;
-import org.apache.pdfbox.pdmodel.PDDocument;
+
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.*;
@@ -28,15 +28,25 @@ class MikaTest {
 
     @Test
     void extract() throws FileNotFoundException {
-        String path ="/home/like/project/data-extract/src/test/qweqweqwe.doc";
+        String path = "/home/like/project/data-extract/53高考总复习A版物理新高考分类精析.pdf";
         FileInputStream stream = new FileInputStream(path);
-        ExtractConfig config = ExtractConfig
-                .defaultConfig()
-                .ocrUrl("http://192.168.50.191:15234/file/ocr")
-                .ocr(false);
-        var result = Mika.extract(new BufferedInputStream(stream), config);
-        System.out.println(result);
+        cost(() -> {
+            ExtractConfig config = ExtractConfig
+                    .defaultConfig()
+                    .ocrUrl("http://192.168.50.191:15234/file/ocr")
+                    .ocr(true);
+            var result = Mika.extract(new BufferedInputStream(stream), config);
+            System.out.println(result);
+        });
     }
+
+    static void cost(Runnable runnable) {
+        long start = System.currentTimeMillis();
+        runnable.run();
+        long end = System.currentTimeMillis();
+        System.out.println("cost time: " + (end - start) + "ms");
+    }
+
 
     @Test
     void test222() throws FileNotFoundException {
