@@ -73,7 +73,7 @@ public interface Extractor {
         BufferedImage image = img.getImage();
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         ImageIO.write(image, "png", baos);
-        return ImageResult.of(baos.toByteArray(), ImageResult.Format.BMP);
+        return ImageResult.of(baos.toByteArray(), ImageResult.Format.PNG);
     }
 
     default ImageResult toImageResult(Picture pic) {
