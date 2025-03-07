@@ -12,7 +12,7 @@ import java.util.List;
 
 public class DocxExtract implements Extractor {
 
-    private final static String MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    private final static String MIME_TYPE = "docx";
     private final static List<String> SUPPORTED_MIME_TYPES = List.of(MIME_TYPE);
 
     @Override

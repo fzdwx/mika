@@ -57,8 +57,6 @@ public interface Extractor {
             return doExtract(config, stream);
         } catch (Exception e) {
             return ExtractResult.error(e);
-        } finally {
-            close(stream);
         }
     }
 

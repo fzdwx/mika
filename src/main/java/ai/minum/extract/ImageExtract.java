@@ -1,18 +1,15 @@
 package ai.minum.extract;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.List;
 
 public class ImageExtract implements Extractor {
 
-    private final static String BMP = "image/bmp";
-    private final static String PNG = "image/png";
-    private final static String JPEG = "image/jpeg";
-    private final static String JPG = "image/jpg";
-    private final static String WEBP = "image/webp";
+    private final static String BMP = "bmp";
+    private final static String PNG = "png";
+    private final static String JPEG = "jpeg";
+    private final static String JPG = "jpg";
+    private final static String WEBP = "webp";
     private final static List<String> SUPPORTED_MIME_TYPES = List.of(BMP, PNG, JPEG, JPG, WEBP);
 
 

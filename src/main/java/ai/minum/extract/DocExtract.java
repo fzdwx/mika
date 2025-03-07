@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
 
 public class DocExtract implements Extractor {
 
-    private final static String MIME_TYPE_1 = "application/x-tika-msoffice";
+    private final static String MIME_TYPE_1 = "doc";
     private final static List<String> SUPPORTED_MIME_TYPES = List.of(MIME_TYPE_1);
 
     // 图片

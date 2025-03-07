@@ -15,7 +15,7 @@ import java.util.List;
 
 public class PDFExtract implements Extractor {
 
-    private final static String MIME_TYPE_1 = "application/pdf";
+    private final static String MIME_TYPE_1 = "pdf";
     private final static List<String> SUPPORTED_MIME_TYPES = List.of(MIME_TYPE_1);
 
     @Override

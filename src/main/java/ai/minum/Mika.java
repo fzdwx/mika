@@ -1,8 +1,11 @@
 package ai.minum;
 
 import ai.minum.extract.*;
+import com.j256.simplemagic.ContentInfo;
+import com.j256.simplemagic.ContentInfoUtil;
 import org.apache.tika.Tika;
 import org.apache.tika.metadata.Metadata;
+import org.apache.tika.mime.MimeTypes;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -23,41 +26,18 @@ public class Mika {
         return tika;
     }
 
-    public static DetectResult detect(InputStream stream) {
-        var metadata = new Metadata();
-        final String result;
-        try {
-            result = tika.detect(stream, metadata);
-            return new DetectResult(result, metadata);
-        } catch (java.io.IOException e) {
-            return new DetectResult((byte) 1, e.getMessage());
-        }
-    }
-
-    public static ExtractResult extract(InputStream stream, ExtractConfig config) {
-        DetectResult detectResult = Mika.detect(stream);
-        try {
-            stream.reset();
-        } catch (IOException e) {
-            return ExtractResult.error(e.getMessage());
-        }
-
-        if (detectResult.isError()) {
-            if (config.fallback()) {
-                return doFallbackExtract(stream);
-            }
-            return ExtractResult.error(detectResult.getErrorMessage());
-        }
-
+    public static ExtractResult extract(String mimeType,InputStream stream, ExtractConfig config) {
         return extractors.stream()
-                .filter(extractor -> extractor.support(detectResult.getContent()))
+                .filter(extractor -> extractor.support(mimeType))
                 .findFirst()
-                .map(extractor -> extractor.extract(config, stream))
+                .map(extractor -> {
+                    return extractor.extract(config, stream);
+                })
                 .orElseGet(() -> {
                     if (config.fallback()) {
                         return doFallbackExtract(stream);
                     }
-                    return ExtractResult.error("No extractor found for " + detectResult.getContent());
+                    return ExtractResult.error("No extractor found for " + mimeType);
                 });
 
     }
