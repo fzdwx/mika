@@ -72,7 +72,7 @@ public interface Extractor {
     default ImageResult toImageResult(PDImageXObject img) throws IOException {
         BufferedImage image = img.getImage();
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        ImageIO.write(image, "bmp", baos);
+        ImageIO.write(image, "png", baos);
         return ImageResult.of(baos.toByteArray(), ImageResult.Format.BMP);
     }
 

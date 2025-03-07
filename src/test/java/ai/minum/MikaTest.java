@@ -28,7 +28,7 @@ class MikaTest {
 
     @Test
     void extract() throws FileNotFoundException {
-        String path = "/home/like/project/data-extract/53高考总复习A版物理新高考分类精析.pdf";
+        String path = "/home/like/project/mika/3-3科学的进食习惯.pdf";
         FileInputStream stream = new FileInputStream(path);
         cost(() -> {
             ExtractConfig config = ExtractConfig
