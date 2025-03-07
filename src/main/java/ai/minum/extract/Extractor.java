@@ -30,10 +30,12 @@ public interface Extractor {
             return "";
         }
 
-
         String imageContent = "";
         if (config.ocr()) {
             imageContent = config.getOcr().doOrc(result.getData());
+            if (imageContent == null) {
+                imageContent = "";
+            }
         }
 
         String content = "\n[Image";
@@ -46,7 +48,7 @@ public interface Extractor {
         } else {
             content = content.concat("]");
         }
-        return content.concat(imageContent);
+        return content.concat(imageContent).concat("[ImageEnd]\n");
     }
 
 

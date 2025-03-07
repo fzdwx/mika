@@ -40,7 +40,7 @@ public class DefaultOcr {
             if (responseEntity != null) {
                 String responseString = EntityUtils.toString(responseEntity);
                 OcrResult result = OcrResult.from(responseString);
-                return  result.getData();
+                return result.getData();
             }
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -48,15 +48,18 @@ public class DefaultOcr {
             try {
                 try {
                     stream.close();
-                }catch (Exception ignore){}
+                } catch (Exception ignore) {
+                }
                 try {
                     httpClient.close();
-                }catch (Exception ignore){}
+                } catch (Exception ignore) {
+                }
                 try {
                     if (response != null) {
                         response.close();
                     }
-                }catch (Exception ignore){}
+                } catch (Exception ignore) {
+                }
             } catch (Exception ignore) {
 
             }
