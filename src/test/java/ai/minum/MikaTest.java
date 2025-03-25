@@ -17,14 +17,14 @@ class MikaTest {
 
     @Test
     void extract() throws FileNotFoundException {
-        String path = "/home/like/project/mika/mikkkkk.ppt";
+        String path = "/home/like/bsdqwe.pdf";
         FileInputStream stream = new FileInputStream(path);
         cost(() -> {
             ExtractConfig config = ExtractConfig
                     .defaultConfig()
                     .ocrUrl("http://192.168.50.191:15234/file/ocr")
                     .ocr(true);
-            var result = Mika.extract("ppt", new BufferedInputStream(stream), config);
+            var result = Mika.extract("pdf", new BufferedInputStream(stream), config);
             System.out.println(result);
         });
     }

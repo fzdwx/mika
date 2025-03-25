@@ -20,6 +20,22 @@ public interface Extractor {
     ExtractResult doExtract(ExtractConfig config, InputStream stream) throws Exception;
 
     default String extractImage(ExtractConfig config, ImageResult result) throws Exception {
+        Long maxHandleImageCount = config.getMaxHandleImageCount();
+        try {
+            if (maxHandleImageCount == -1) {
+                return doExtractImage(config, result);
+            }
+            if (maxHandleImageCount > 0) {
+                return doExtractImage(config, result);
+            }
+        } finally {
+            maxHandleImageCount--;
+            config.maxHandleImageCount(maxHandleImageCount);
+        }
+        return "";
+    }
+
+    private static String doExtractImage(ExtractConfig config, ImageResult result) throws Exception {
         if (result.length() > config.imageExtractMaxSize()) {
             return "";
         }

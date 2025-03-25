@@ -16,6 +16,23 @@ public class ExtractConfig {
 
     private ImageUploader imageUploader;
     private boolean uploadImage = false;
+    // 最大处理图片数量 -1 为不限制
+    private Long maxHandleImageCount = 100L;
+
+    public Long getMaxHandleImageCount() {
+        return maxHandleImageCount;
+    }
+
+    public ExtractConfig maxHandleImageCount(Long maxHandleImageCount) {
+        if (maxHandleImageCount == null) {
+            maxHandleImageCount = 100L;
+        }
+        if (maxHandleImageCount < 0) {
+            maxHandleImageCount = -1L;
+        }
+        this.maxHandleImageCount = maxHandleImageCount;
+        return this;
+    }
 
     public static ExtractConfig defaultConfig() {
         return new ExtractConfig();
