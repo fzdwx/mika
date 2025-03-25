@@ -54,6 +54,9 @@ public class DocxExtract implements Extractor {
     private List<String> doOcr(ExtractConfig config, XWPFDocument docx, List<String> images) throws Exception {
         List<String> result = new ArrayList<>();
         for (String imageId : images) {
+            if (!config.canHandleImage()) {
+                continue;
+            }
             XWPFPictureData pic = docx.getPictureDataByID(imageId);
             String imageOcrResult = this.extractImage(config, this.toImageResult(pic));
             result.add(imageOcrResult);

@@ -43,6 +43,9 @@ public class PDFExtract implements Extractor {
                         PDXObject pdxObject = resources.getXObject(name);
                         if (pdxObject instanceof PDImageXObject img) {
                             result.setHasImage(true);
+                            if(!config.canHandleImage()) {
+                                continue;
+                            }
                             ImageResult imageResult = toImageResult(img);
                             String imageOcrResult = this.extractImage(config, imageResult);
                             content.append(imageOcrResult);

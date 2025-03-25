@@ -19,6 +19,17 @@ public class ExtractConfig {
     // 最大处理图片数量 -1 为不限制
     private Long maxHandleImageCount = 100L;
 
+    public boolean canHandleImage() {
+        if (maxHandleImageCount == -1) {
+            return true;
+        }
+        if (maxHandleImageCount == 0) {
+            return false;
+        }
+        maxHandleImageCount = maxHandleImageCount - 1;
+        return maxHandleImageCount >= 0;
+    }
+
     public Long getMaxHandleImageCount() {
         return maxHandleImageCount;
     }
