@@ -21,15 +21,22 @@ public interface Extractor {
 
     default String extractImage(ExtractConfig config, ImageResult result) throws Exception {
         Long maxHandleImageCount = config.getMaxHandleImageCount();
+        if (maxHandleImageCount == -1) {
+            return doExtractImage(config, result);
+        }
+        if (maxHandleImageCount == 0) {
+            return "";
+        }
+        
         try {
-            if (maxHandleImageCount == -1) {
-                return doExtractImage(config, result);
-            }
             if (maxHandleImageCount > 0) {
                 return doExtractImage(config, result);
             }
         } finally {
             maxHandleImageCount--;
+            if (maxHandleImageCount <= 0) {
+                maxHandleImageCount = 0L;
+            }
             config.maxHandleImageCount(maxHandleImageCount);
         }
         return "";
