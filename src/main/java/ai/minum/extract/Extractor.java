@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -21,6 +22,9 @@ public interface Extractor {
 
     default String extractImage(ExtractConfig config, ImageResult result) throws Exception {
         if (result.length() > config.imageExtractMaxSize()) {
+            return "";
+        }
+        if (result.getData().length == 0) {
             return "";
         }
 
@@ -69,18 +73,41 @@ public interface Extractor {
 
     default ImageResult toImageResult(PDImageXObject img) throws IOException {
         BufferedImage image = img.getImage();
+        if (checkRatio(image.getHeight(), image.getWidth())) {
+            return ImageResult.of(new byte[]{}, ImageResult.Format.UNKNOWN);
+        }
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         ImageIO.write(image, "png", baos);
         return ImageResult.of(baos.toByteArray(), ImageResult.Format.PNG);
     }
 
     default ImageResult toImageResult(Picture pic) {
+        if (checkRatio(pic.getWidth(), pic.getHeight())) {
+            return ImageResult.of(new byte[]{}, ImageResult.Format.UNKNOWN);
+        }
         byte[] content = pic.getContent();
         return ImageResult.of(content, pic.suggestPictureType());
     }
 
     default ImageResult toImageResult(XWPFPictureData pic) {
         byte[] content = pic.getData();
+        InputStream buffin = new ByteArrayInputStream(content);
+        try {
+            BufferedImage image = ImageIO.read(buffin);
+            if (checkRatio(image.getHeight(), image.getWidth())) {
+                return ImageResult.of(new byte[]{}, ImageResult.Format.UNKNOWN);
+            }
+        } catch (IOException e) {
+            return ImageResult.of(new byte[]{}, ImageResult.Format.UNKNOWN);
+        }
+
+
         return ImageResult.of(content, pic.getPictureTypeEnum());
+    }
+
+    default boolean checkRatio(int a, int b) {
+        int max = Math.max(a, b);
+        int min = Math.min(a, b);
+        return max / min > 8;
     }
 }

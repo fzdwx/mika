@@ -17,15 +17,15 @@ class MikaTest {
 
     @Test
     void extract() throws FileNotFoundException {
-        String path = "Snipaste_2025-02-21_17-37-12.bmp";
+        String path = "/home/like/project/mika/私人股权投资.pdf";
         FileInputStream stream = new FileInputStream(path);
         cost(() -> {
             ExtractConfig config = ExtractConfig
                     .defaultConfig()
-                    .ocrUrl("http://localhost:15234/file/ocr")
+                    .ocrUrl("http://192.168.50.191:15234/file/ocr")
                     .imageExtractMaxSize(Integer.MAX_VALUE)
                     .ocr(true);
-            var result = Mika.extract("bmp", new BufferedInputStream(stream), config);
+            var result = Mika.extract("pdf", new BufferedInputStream(stream), config);
             System.out.println(result);
         });
     }
