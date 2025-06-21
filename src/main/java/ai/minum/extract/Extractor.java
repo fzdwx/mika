@@ -73,6 +73,9 @@ public interface Extractor {
 
     default ImageResult toImageResult(PDImageXObject img) throws IOException {
         BufferedImage image = img.getImage();
+        if (image == null) {
+            return ImageResult.of(new byte[]{}, ImageResult.Format.UNKNOWN);
+        }
         if (checkRatio(image.getHeight(), image.getWidth())) {
             return ImageResult.of(new byte[]{}, ImageResult.Format.UNKNOWN);
         }
@@ -82,6 +85,9 @@ public interface Extractor {
     }
 
     default ImageResult toImageResult(Picture pic) {
+        if (pic == null) {
+            return ImageResult.of(new byte[]{}, ImageResult.Format.UNKNOWN);
+        }
         if (checkRatio(pic.getWidth(), pic.getHeight())) {
             return ImageResult.of(new byte[]{}, ImageResult.Format.UNKNOWN);
         }
@@ -94,6 +100,9 @@ public interface Extractor {
         InputStream buffin = new ByteArrayInputStream(content);
         try {
             BufferedImage image = ImageIO.read(buffin);
+            if (image == null) {
+                return ImageResult.of(new byte[]{}, ImageResult.Format.UNKNOWN);
+            }
             if (checkRatio(image.getHeight(), image.getWidth())) {
                 return ImageResult.of(new byte[]{}, ImageResult.Format.UNKNOWN);
             }
