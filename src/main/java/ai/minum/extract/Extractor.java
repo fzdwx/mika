@@ -40,6 +40,8 @@ public interface Extractor {
             if (imageContent == null) {
                 imageContent = "";
             }
+        } else {
+            return "";
         }
 
         String content = "\n[Image";
