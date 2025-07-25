@@ -58,6 +58,9 @@ public class DocxExtract implements Extractor {
                 continue;
             }
             XWPFPictureData pic = docx.getPictureDataByID(imageId);
+            if (pic == null) {
+                continue;
+            }
             String imageOcrResult = this.extractImage(config, this.toImageResult(pic));
             result.add(imageOcrResult);
         }
