@@ -9,12 +9,16 @@ import org.apache.pdfbox.pdmodel.graphics.PDXObject;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 
 public class PDFExtract implements Extractor {
 
+    private static final Logger logger = LoggerFactory.getLogger(PDFExtract.class);
     private final static String MIME_TYPE_1 = "pdf";
     private final static List<String> SUPPORTED_MIME_TYPES = List.of(MIME_TYPE_1);
 
@@ -46,7 +50,18 @@ public class PDFExtract implements Extractor {
                             if(!config.canHandleImage()) {
                                 continue;
                             }
-                            ImageResult imageResult = toImageResult(img);
+                            ImageResult imageResult;
+                            try {
+                                imageResult = toImageResult(img);
+                            } catch (IOException | RuntimeException e) {
+                                logger.warn(
+                                        "Skip undecodable PDF image: page={}, xObject={}",
+                                        i + 1,
+                                        name.getName(),
+                                        e
+                                );
+                                continue;
+                            }
                             String imageOcrResult = this.extractImage(config, imageResult);
                             content.append(imageOcrResult);
                         }
