@@ -55,9 +55,8 @@ public class PDFExtract implements Extractor {
                                 imageResult = toImageResult(img);
                             } catch (IOException | RuntimeException e) {
                                 logger.warn(
-                                        "Skip undecodable PDF image: page={}, xObject={}",
+                                        "Skip undecodable PDF image: page={}",
                                         i + 1,
-                                        name.getName(),
                                         e
                                 );
                                 continue;
