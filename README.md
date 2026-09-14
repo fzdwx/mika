@@ -30,7 +30,7 @@ try (var stream = Files.newInputStream(Path.of("操作手册.docx"))) {
 | --- | --- |
 | DOC / DOT / DOCX | Word 6 及以上经 Tika 结构提取后转换为 Markdown；Word 2.x 从 FIB 连续文本区或 FastSave piece table 恢复正文、脚注、页眉页脚和批注，并跳过 WordBasic 宏流；保留可解析的标题、段落、链接、表格、嵌套内容和图片位置；DOCX 使用 SAX 解析以兼容新式图表 |
 | XLS / XLSX、PPT / PPTX 等 Tika 支持的格式 | 从结构化 XHTML 转换为 Markdown，避免只提取一串纯文本 |
-| PDF | 按文档内容流保留阅读顺序；阿拉伯文、希伯来文等从右到左页面自动切换坐标排序；保留物理页，图片上传链接和 OCR 文字附在所在页末尾 |
+| PDF | 按文档内容流保留阅读顺序；逐字断行或阿拉伯文、希伯来文等页面自动切换坐标排序；读取结构树 `/ActualText` 纠正无障碍 PDF 的错误字符；保留物理页，图片上传链接和 OCR 文字附在所在页末尾 |
 | Markdown | UTF-8 原样读取，仅去除文件开头的 BOM |
 | TXT | 保留换行并转义 Markdown 特殊字符，避免普通文本被误当成标题或强调 |
 | 图片 | 兼容图片块 `[Image](url)OCR文字[ImageEnd]`；可以只上传图片而不开启 OCR |
@@ -59,7 +59,7 @@ config.ocrUrl("http://your-ocr-service/file/ocr");
 
 图片块沿用 `[Image](key)…[ImageEnd]`，供现有下游定位图片地址并把 OCR 正文留在原位置。`key` 是 `ImageUploader` 返回值的原文，Mika 不做 URL 编码。没有上传地址时输出 `[Image]OCR文字[ImageEnd]`。它是 Mika 在 Markdown 上保留的兼容扩展，展示或分块前可按这对边界解析。
 
-PDF 会查找实际绘制的普通图片、嵌套 Form 内的图片和 inline 图片，同页重复使用的同一个图片对象只处理一次。不开启 OCR/上传时不解码图片。无法解码的图片产生 warning 并保留该页文字；OCR、上传抛出的异常仍使提取失败，供上游重试。
+PDF 会查找实际绘制的普通图片、嵌套 Form 内的图片和 inline 图片，同页重复使用的同一个图片对象只处理一次。不开启 OCR/上传时不解码图片。JPEG 和 JPEG2000 扫描页保留原始压缩数据，OCR 请求携带对应的 MIME 和扩展名；无法解码的其他图片产生 warning 并保留该页文字。OCR、上传抛出的异常仍使提取失败，供上游重试。
 
 OCR 请求沿用 multipart `file` 协议，响应要求包含字符串 `data`，例如 `{"code":0,"data":"识别正文"}`；空字符串是有效结果。使用 UTF-8 读取响应，非 2xx、空响应或缺少 `data` 会失败。连接超时为 10 秒，读取超时为 120 秒。业务 `code` 的成功值因服务而异，目前未校验，沿用既有协议。OCR 文字按普通文本转义，不推测成标题或表格。
 
@@ -71,7 +71,7 @@ OCR 请求沿用 multipart `file` 协议，响应要求包含字符串 `data`，
 - `data-extract` 应在存储层保留 Markdown 空行和图片块边界。
 - `hasImage()` 表示存在图片，不代表已识别所有图片。`hasTable()` 表示解析器识别到了表格；PDF 的 Form XObject 不再被误判为表格，PDF 表格结构仍需版面识别。
 - PDF 内容流正确的多栏文档会保留阅读顺序；内容流本身错误时仍需版面识别。扫描页拼接、图文精确穿插、公式和 PDF 表格识别不在这轮实现范围内。Word 合并单元格及复杂编号的结构恢复仍受 Tika 输出能力限制，当前不保证还原合并几何或生成原生嵌套列表。
-- Mika 可在 JVM 内提取未加密 Word 2.x 的普通保存和 FastSave 文件，并按 FIB 的语言和字符集解码正文、脚注、页眉页脚和批注。域结果、项目符号、分页和旧式单元格控制符会转为 Markdown，WordBasic 宏流不会进入检索正文；旧图形数据不能解码时保留 `[Image][ImageEnd]` 并产生 warning。加密或损坏文件返回明确错误，可再用 LibreOffice 转换后重试。DOCX 批注会转换为 Markdown 内容，嵌入附件不递归并入正文。
+- Mika 可在 JVM 内提取未加密 Word 2.x 的普通保存和 FastSave 文件，并按 FIB 的语言和字符集解码正文、脚注、页眉页脚和批注。域结果、项目符号、分页和旧式单元格控制符会转为 Markdown，WordBasic 宏流不会进入检索正文；旧图形数据不能解码时保留 `[Image][ImageEnd]` 并产生 warning。加密或损坏文件返回明确错误，可再用 LibreOffice 转换后重试。DOCX 批注和 AltChunk 正文会转换为 Markdown，AltChunk 内图仍在正文位置，普通嵌入附件不递归并入正文。
 - 长文本不再经过 `Tika.parseToString()` 默认长度上限，但当前仍在内存构建完整结果；超大文件的流式处理需要后续升级。
 
 ## 验证

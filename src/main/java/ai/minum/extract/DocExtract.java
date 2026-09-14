@@ -1,5 +1,10 @@
 package ai.minum.extract;
 
+import org.apache.tika.metadata.Metadata;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Node;
+import org.jsoup.nodes.TextNode;
+
 import java.io.BufferedInputStream;
 import java.io.InputStream;
 
@@ -25,5 +30,30 @@ public class DocExtract extends TikaExtractor {
             return Word2Extract.extract(checkedStream);
         }
         return super.doExtract(config, checkedStream);
+    }
+
+    @Override
+    protected void cleanDocument(Document document, Metadata metadata) {
+        // HWPF comments start with Word's 0x05 annotation marker. Tika's XML serializer turns
+        // that illegal XML control into U+FFFD; it is not part of the author's comment text.
+        for (var paragraph : document.select("p")) {
+            for (Node child : paragraph.childNodes()) {
+                if (!(child instanceof TextNode text)) {
+                    break;
+                }
+                String value = text.getWholeText();
+                if (value.isBlank()) {
+                    continue;
+                }
+                int marker = 0;
+                while (marker < value.length() && Character.isWhitespace(value.charAt(marker))) {
+                    marker++;
+                }
+                if (marker < value.length() && value.charAt(marker) == '\uFFFD') {
+                    text.text(value.substring(0, marker) + value.substring(marker + 1));
+                }
+                break;
+            }
+        }
     }
 }

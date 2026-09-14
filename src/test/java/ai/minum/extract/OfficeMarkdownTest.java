@@ -57,6 +57,63 @@ class OfficeMarkdownTest {
             assertTrue(render(result.getMarkdown()).contains("<table>"), result.getMarkdown());
         }
     }
+
+    /** Apache Tika test-documents/testWORD_features.doc (Apache-2.0). */
+    @Test
+    void legacyDocCommentsDoNotExposeWordAnnotationControlMarkers() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/tika-word-features.doc")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("doc", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("This is another comment"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("This is a comment"), result.getMarkdown());
+            assertFalse(result.getMarkdown().contains("�"), result.getMarkdown());
+        }
+    }
+
+    @Test
+    void docxIncludesHtmlAltChunkBodyWithoutSyntheticPartName() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/tika-altchunk-html.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("Simple paragraph with a emphasized word."),
+                    result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("| Col 1 | Col 2 |"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("| ROW 2 | ROW 2 |"), result.getMarkdown());
+            assertFalse(result.getMarkdown().contains("htmlDoc.html"), result.getMarkdown());
+            assertTrue(result.hasTable());
+        }
+    }
+
+    @Test
+    void docxIncludesMhtmlAltChunkAndProcessesReferencedImage() throws Exception {
+        AtomicInteger uploads = new AtomicInteger();
+        ExtractConfig config = ExtractConfig.defaultConfig()
+                .imageUploader(image -> {
+                    uploads.incrementAndGet();
+                    return "images/dot.png";
+                })
+                .maxHandleImageCount(5L);
+        try (var input = getClass().getResourceAsStream("/documents/tika-altchunk-mht.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, config);
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("Simple paragraph with a emphasized word."),
+                    result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("Red PNG dot; ROW 2"), result.getMarkdown());
+            assertEquals(1, uploads.get(), "Repeated MHTML image references share one MIME part");
+            assertEquals(2, count(result.getMarkdown(), "[Image](images/dot.png)[ImageEnd]"),
+                    result.getMarkdown());
+            assertFalse(result.getMarkdown().contains("htmlDoc.mht"), result.getMarkdown());
+            assertTrue(result.hasTable());
+            assertTrue(result.hasImage());
+        }
+    }
+
     @Test
     void docxPreservesHeadingsTableBoundariesAndFollowingParagraph() throws Exception {
         try (XWPFDocument document = new XWPFDocument()) {

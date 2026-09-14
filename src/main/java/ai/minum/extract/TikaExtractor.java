@@ -27,6 +27,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.StandardCopyOption;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -72,6 +73,12 @@ public class TikaExtractor implements Extractor {
                 if (isImage(metadata)) {
                     return true;
                 }
+                // An OOXML altChunk is part of the Word body even though Tika exposes it through
+                // the embedded-document API. Parse HTML/MHTML chunks while keeping ordinary file
+                // attachments out of the parent document.
+                if (isAlternateFormatChunk(metadata)) {
+                    return true;
+                }
                 // Attachments are separate documents. Recursive extraction creates ambiguous image
                 // names and unbounded expansion; callers can submit them as independent files.
                 return false;
@@ -83,6 +90,9 @@ public class TikaExtractor implements Extractor {
                 if (isImage(metadata)) {
                     return;
                 }
+                if (isAlternateFormatChunk(metadata)) {
+                    super.parseEmbedded(input, handler, metadata, outputHtml);
+                }
             }
         });
 
@@ -92,29 +102,35 @@ public class TikaExtractor implements Extractor {
         Metadata metadata = new Metadata();
         parser.parse(stream, handler, metadata, context);
         Document document = Jsoup.parse(xhtml.toString(StandardCharsets.UTF_8));
+        cleanDocument(document, metadata);
         result.setHasTable(!document.select("table").isEmpty());
         result.setHasImage(!document.select("img").isEmpty());
 
         Set<String> referencedImages = new LinkedHashSet<>();
+        Set<String> anonymousImages = new LinkedHashSet<>();
         for (Element image : document.select("img")) {
-            String imageSource = image.attr("src");
-            if (imageSource.startsWith("embedded:")) {
-                referencedImages.add(imageSource.substring("embedded:".length()));
+            String name = referencedImageName(image);
+            if (name != null) {
+                referencedImages.add(name);
+                if (image.attr("src").startsWith("file:")) {
+                    anonymousImages.add(name);
+                }
             }
         }
         Map<String, String> processedImages = repeatableSource == null || referencedImages.isEmpty()
                 ? Map.of()
-                : processReferencedImages(config, repeatableSource, referencedImages, result, parser);
+                : processReferencedImages(config, repeatableSource, referencedImages, anonymousImages,
+                        result, parser);
 
         Map<String, String> imageMarkers = new LinkedHashMap<>();
         String sourceText = document.text();
         int markerIndex = 0;
         for (Element image : document.select("img")) {
-            String source = image.attr("src");
-            if (!source.startsWith("embedded:")) {
+            String name = referencedImageName(image);
+            if (name == null) {
                 continue;
             }
-            String content = processedImages.get(source.substring("embedded:".length()));
+            String content = processedImages.get(name);
             if (content == null || content.isBlank()) {
                 image.remove();
             } else {
@@ -130,6 +146,9 @@ public class TikaExtractor implements Extractor {
                 imageMarkers.put(marker, content);
             }
         }
+        // Tika adds the package part name as a synthetic heading around altChunk content. It is an
+        // implementation detail rather than Word body text and would otherwise pollute retrieval.
+        document.select("div.package-entry > h1:first-child").remove();
         String contentType = metadata.get(Metadata.CONTENT_TYPE);
         String markdown = contentType != null && contentType.startsWith("text/plain")
                 ? Markdown.fromText(document.body().wholeText())
@@ -141,8 +160,13 @@ public class TikaExtractor implements Extractor {
         return result;
     }
 
+    /** Format-specific cleanup after Tika has produced XHTML and before Markdown conversion. */
+    protected void cleanDocument(Document document, Metadata metadata) {
+    }
+
     private Map<String, String> processReferencedImages(ExtractConfig config, Path source,
-                                                         Set<String> referencedImages, ExtractResult result,
+                                                         Set<String> referencedImages, Set<String> anonymousImages,
+                                                         ExtractResult result,
                                                          Parser parser) throws Exception {
         long imageLimit = config.getMaxHandleImageCount();
         Set<String> selectedImages = new LinkedHashSet<>();
@@ -154,18 +178,44 @@ public class TikaExtractor implements Extractor {
             selectedImages.add(name);
         }
         Map<String, String> processed = new LinkedHashMap<>();
+        Iterator<String> anonymousImageNames = anonymousImages.stream()
+                .filter(selectedImages::contains).iterator();
         ParseContext context = parseContext(parser);
         context.set(EmbeddedDocumentExtractor.class, new ParsingEmbeddedDocumentExtractor(context) {
+            private int alternateFormatDepth;
+
             @Override
             public boolean shouldParseEmbedded(Metadata metadata) {
                 String name = metadata.get(TikaCoreProperties.RESOURCE_NAME_KEY);
-                return isImage(metadata) && selectedImages.contains(name) && !processed.containsKey(name);
+                return isAlternateFormatChunk(metadata)
+                        || isImage(metadata) && (name == null && alternateFormatDepth > 0
+                        || selectedImages.contains(name) && !processed.containsKey(name));
             }
 
             @Override
             public void parseEmbedded(InputStream input, ContentHandler handler, Metadata metadata,
                                       boolean outputHtml) throws SAXException, IOException {
+                if (isAlternateFormatChunk(metadata)) {
+                    alternateFormatDepth++;
+                    try {
+                        super.parseEmbedded(input, handler, metadata, outputHtml);
+                    } finally {
+                        alternateFormatDepth--;
+                    }
+                    return;
+                }
                 String name = metadata.get(TikaCoreProperties.RESOURCE_NAME_KEY);
+                // Tika's RFC 822 parser currently omits Content-Location from embedded MHTML image
+                // metadata. Match anonymous parts to the remaining body references in encounter order.
+                while (name == null && alternateFormatDepth > 0 && anonymousImageNames.hasNext()) {
+                    String candidate = anonymousImageNames.next();
+                    if (!processed.containsKey(candidate)) {
+                        name = candidate;
+                    }
+                }
+                if (name == null || !selectedImages.contains(name) || processed.containsKey(name)) {
+                    return;
+                }
                 int limit = (int) Math.min((long) config.imageExtractMaxSize() + 1, Integer.MAX_VALUE);
                 byte[] bytes = input.readNBytes(Math.max(0, limit));
                 ImageResult image = ImageResult.of(bytes,
@@ -214,6 +264,27 @@ public class TikaExtractor implements Extractor {
 
     private static boolean isThumbnail(Metadata metadata) {
         return "THUMBNAIL".equals(metadata.get(TikaCoreProperties.EMBEDDED_RESOURCE_TYPE));
+    }
+
+    private static boolean isAlternateFormatChunk(Metadata metadata) {
+        return "ALTERNATE_FORMAT_CHUNK".equals(
+                metadata.get(TikaCoreProperties.EMBEDDED_RESOURCE_TYPE));
+    }
+
+    private static String referencedImageName(Element image) {
+        String source = image.attr("src");
+        if (source.startsWith("embedded:")) {
+            return source.substring("embedded:".length());
+        }
+        // HTML imported through an MHTML altChunk commonly uses file:///name image references.
+        boolean insidePackageEntry = image.parents().stream()
+                .anyMatch(parent -> parent.hasClass("package-entry"));
+        if (source.startsWith("file:") && insidePackageEntry) {
+            int slash = Math.max(source.lastIndexOf('/'), source.lastIndexOf('\\'));
+            String name = source.substring(slash + 1);
+            return name.isBlank() ? null : name;
+        }
+        return null;
     }
 
     private static final class SizeLimitedOutputStream extends OutputStream {

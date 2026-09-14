@@ -9,6 +9,9 @@ import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.PDFormContentStream;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement;
+import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot;
+import org.apache.pdfbox.pdmodel.documentinterchange.taggedpdf.StandardStructureTypes;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory;
@@ -21,6 +24,8 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -65,6 +70,61 @@ class PDFExtractTest {
     }
 
     @Test
+    void identifiesCharacterWiseExtractionWithoutFlaggingNormalParagraphs() {
+        assertTrue(PDFExtract.isFragmentedExtraction("a\np\na\nc\nh\ne\n".repeat(5)));
+        assertFalse(PDFExtract.isFragmentedExtraction(
+                "A normal paragraph with enough text on every line.\n".repeat(30)));
+    }
+
+    /** Apache Tika test-documents/testPDF_rotated.pdf (Apache-2.0). */
+    @Test
+    void positionSortingRepairsRotatedTextMatrices() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/tika-rotated.pdf")) {
+            assertTrue(input != null);
+            ExtractResult result = Mika.extract("pdf", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("Apache Tika is a toolkit for detecting"),
+                    result.getMarkdown());
+            assertTrue(result.getMarkdown().lines().count() < 50, result.getMarkdown());
+        }
+    }
+
+    @Test
+    void usesActualTextStoredInThePdfStructureTree() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            PDStructureTreeRoot root = new PDStructureTreeRoot();
+            document.getDocumentCatalog().setStructureTreeRoot(root);
+            PDStructureElement documentElement = new PDStructureElement(
+                    StandardStructureTypes.DOCUMENT, root);
+            root.appendKid(documentElement);
+            PDStructureElement span = new PDStructureElement(StandardStructureTypes.SPAN, documentElement);
+            span.setPage(page);
+            span.setActualText("Available 24/7, you can book an appointment online.");
+            span.appendKid(17);
+            documentElement.appendKid(span);
+            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                content.beginMarkedContent(COSName.getPDFName("Span"), 17);
+                writeText(content, "Availal;!e 24/7, you c;m book an appointroP.nt online.", 72, 720);
+                content.endMarkedContent();
+            }
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        ExtractResult result = Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig());
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(result.getMarkdown().contains(
+                "Available 24/7, you can book an appointment online."), result.getMarkdown());
+        assertFalse(result.getMarkdown().contains("Availal;!e"), result.getMarkdown());
+    }
+
+    @Test
     void keepsJpegScansCompressedForOcrAndUploadLimits() throws Exception {
         BufferedImage bufferedImage = new BufferedImage(40, 40, BufferedImage.TYPE_INT_RGB);
         ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
@@ -76,6 +136,28 @@ class PDFExtractTest {
 
             assertEquals(ImageResult.Format.JPEG, result.getMimeType());
             assertArrayEquals(jpeg.toByteArray(), result.getData());
+        }
+    }
+
+    /** Apache Tika test-documents/testPDF_jpeg2000.pdf (Apache-2.0). */
+    @Test
+    void keepsJpeg2000ScansCompressedForOcrAndUploadBackends() throws Exception {
+        AtomicReference<ImageResult> uploaded = new AtomicReference<>();
+        try (var input = getClass().getResourceAsStream("/documents/tika-jpeg2000.pdf")) {
+            assertTrue(input != null);
+            ExtractResult result = Mika.extract("pdf", input, ExtractConfig.defaultConfig()
+                    .imageUploader(image -> {
+                        uploaded.set(image);
+                        return "images/scan.jp2";
+                    }));
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertEquals(ImageResult.Format.JPEG2000, uploaded.get().getMimeType());
+            assertArrayEquals(new byte[]{0, 0, 0, 12, 106, 80, 32, 32},
+                    Arrays.copyOf(uploaded.get().getData(), 8));
+            assertTrue(result.getMarkdown().contains("[Image](images/scan.jp2)[ImageEnd]"),
+                    result.getMarkdown());
+            assertTrue(result.hasImage());
         }
     }
 

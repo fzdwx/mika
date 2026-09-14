@@ -3,9 +3,14 @@ package ai.minum.extract;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.contentstream.PDFGraphicsStreamEngine;
 import org.apache.pdfbox.cos.COSBase;
+import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDMarkedContentReference;
+import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement;
+import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureNode;
+import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImage;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.text.PDFTextStripper;
@@ -20,7 +25,9 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public class PDFExtract implements Extractor {
@@ -35,20 +42,22 @@ public class PDFExtract implements Extractor {
     public ExtractResult doExtract(ExtractConfig config, InputStream stream) throws Exception {
         ExtractResult result = ExtractResult.of();
         try (PDDocument doc = Loader.loadPDF(stream.readAllBytes())) {
-            PDFTextStripper reader = new PDFTextStripper();
-            // Keep the content-stream order. Tagged/accessible PDFs place text in their intended
-            // reading order; sorting by coordinates interleaves rows across visual columns.
-            reader.setSortByPosition(false);
+            Map<COSDictionary, Map<Integer, String>> structureActualText = structureActualText(doc);
             for (int i = 0; i < doc.getNumberOfPages(); i++) {
-                reader.setStartPage(i + 1);
-                reader.setEndPage(i + 1);
-                String text = reader.getText(doc);
-                if (isPredominantlyRightToLeft(text)) {
+                Map<Integer, String> pageActualText = structureActualText.getOrDefault(
+                        doc.getPage(i).getCOSObject(), Map.of());
+                // Keep content-stream order first. Tagged and multi-column PDFs commonly encode
+                // their intended reading order there, while coordinate sorting interleaves columns.
+                String text = extractPageText(doc, i, false, pageActualText);
+                if (isPredominantlyRightToLeft(text) || isFragmentedExtraction(text)) {
                     // Older Arabic/Hebrew PDFs often store glyphs in visual order. PDFBox's
-                    // position sorter also applies its bidi normalization for those pages.
-                    reader.setSortByPosition(true);
-                    text = reader.getText(doc);
-                    reader.setSortByPosition(false);
+                    // position sorter applies bidi normalization. It also repairs PDFs whose
+                    // transformed text matrices make content-stream extraction nearly character-wise.
+                    String positionSorted = extractPageText(doc, i, true, pageActualText);
+                    if (isPredominantlyRightToLeft(text)
+                            || hasMateriallyBetterLineStructure(text, positionSorted)) {
+                        text = positionSorted;
+                    }
                 }
                 StringBuilder content = new StringBuilder(Markdown.fromText(text));
                 PageImages images = new PageImages(doc.getPage(i));
@@ -91,6 +100,15 @@ public class PDFExtract implements Extractor {
         return result;
     }
 
+    private static String extractPageText(PDDocument document, int pageIndex, boolean sortByPosition,
+                                          Map<Integer, String> structureActualText) throws IOException {
+        PDFTextStripper reader = new StructureActualTextStripper(structureActualText);
+        reader.setSortByPosition(sortByPosition);
+        reader.setStartPage(pageIndex + 1);
+        reader.setEndPage(pageIndex + 1);
+        return reader.getText(document);
+    }
+
     static boolean isPredominantlyRightToLeft(String text) {
         int letters = 0;
         int rightToLeftLetters = 0;
@@ -108,6 +126,146 @@ public class PDFExtract implements Extractor {
             }
         }
         return rightToLeftLetters >= 8 && rightToLeftLetters * 2 >= letters;
+    }
+
+    static boolean isFragmentedExtraction(String text) {
+        return fragmentationScore(text) >= 0.65;
+    }
+
+    private static double fragmentationScore(String text) {
+        int lines = nonBlankLineCount(text);
+        int shortLines = 0;
+        int characters = 0;
+        for (String line : text.split("\\R")) {
+            String trimmed = line.strip();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            int length = trimmed.codePointCount(0, trimmed.length());
+            characters += length;
+            if (length <= 3) {
+                shortLines++;
+            }
+        }
+        if (lines < 20 || characters >= lines * 8) {
+            return 0;
+        }
+        return (double) shortLines / lines;
+    }
+
+    private static boolean hasMateriallyBetterLineStructure(String contentOrder, String positionOrder) {
+        int contentLines = nonBlankLineCount(contentOrder);
+        int positionLines = nonBlankLineCount(positionOrder);
+        return fragmentationScore(positionOrder) < fragmentationScore(contentOrder)
+                && contentLines >= 20
+                && contentLines >= positionLines * 4L;
+    }
+
+    private static int nonBlankLineCount(String text) {
+        int lines = 0;
+        for (String line : text.split("\\R")) {
+            if (!line.isBlank()) {
+                lines++;
+            }
+        }
+        return lines;
+    }
+
+    private static Map<COSDictionary, Map<Integer, String>> structureActualText(PDDocument document) {
+        PDStructureTreeRoot root = document.getDocumentCatalog().getStructureTreeRoot();
+        if (root == null) {
+            return Map.of();
+        }
+        Map<COSDictionary, Map<Integer, String>> result = new IdentityHashMap<>();
+        Set<COSDictionary> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        try {
+            collectActualText(root, null, null, result, visited);
+            return result;
+        } catch (RuntimeException malformedStructure) {
+            // A malformed optional structure tree must not prevent extraction of the page streams.
+            logger.warn("Ignore malformed PDF structure tree while reading ActualText", malformedStructure);
+            return Map.of();
+        }
+    }
+
+    private static void collectActualText(PDStructureNode node, PDPage inheritedPage,
+                                          ActualTextGroup inheritedGroup,
+                                          Map<COSDictionary, Map<Integer, String>> result,
+                                          Set<COSDictionary> visited) {
+        if (!visited.add(node.getCOSObject())) {
+            return;
+        }
+        PDPage page = inheritedPage;
+        ActualTextGroup group = inheritedGroup;
+        if (node instanceof PDStructureElement element) {
+            if (element.getPage() != null) {
+                page = element.getPage();
+            }
+            if (element.getActualText() != null) {
+                group = new ActualTextGroup(element.getActualText());
+            }
+        }
+        for (Object kid : node.getKids()) {
+            if (kid instanceof PDStructureNode child) {
+                collectActualText(child, page, group, result, visited);
+            } else if (kid instanceof Integer mcid) {
+                addActualText(result, page, mcid, group);
+            } else if (kid instanceof PDMarkedContentReference reference) {
+                PDPage referencePage = reference.getPage() == null ? page : reference.getPage();
+                addActualText(result, referencePage, reference.getMCID(), group);
+            }
+        }
+    }
+
+    private static void addActualText(Map<COSDictionary, Map<Integer, String>> result, PDPage page,
+                                      int mcid, ActualTextGroup group) {
+        if (page == null || mcid < 0 || group == null) {
+            return;
+        }
+        Map<Integer, String> pageValues = result.computeIfAbsent(
+                page.getCOSObject(), ignored -> new LinkedHashMap<>());
+        if (!pageValues.containsKey(mcid)) {
+            pageValues.put(mcid, group.take());
+        }
+    }
+
+    private static final class ActualTextGroup {
+        private final String text;
+        private boolean emitted;
+
+        private ActualTextGroup(String text) {
+            this.text = text.replace("\u00ad", "");
+        }
+
+        private String take() {
+            if (emitted) {
+                return "";
+            }
+            emitted = true;
+            return text;
+        }
+    }
+
+    /** Adds /ActualText stored on structure elements to PDFBox's marked-content handling. */
+    private static final class StructureActualTextStripper extends PDFTextStripper {
+        private final Map<Integer, String> structureActualText;
+
+        private StructureActualTextStripper(Map<Integer, String> structureActualText) {
+            this.structureActualText = structureActualText;
+        }
+
+        @Override
+        public void beginMarkedContentSequence(COSName tag, COSDictionary properties) {
+            COSDictionary effectiveProperties = properties;
+            if (properties != null && properties.getString(COSName.ACTUAL_TEXT) == null) {
+                int mcid = properties.getInt(COSName.MCID, -1);
+                if (structureActualText.containsKey(mcid)) {
+                    effectiveProperties = new COSDictionary(properties);
+                    effectiveProperties.setString(COSName.ACTUAL_TEXT, structureActualText.get(mcid));
+                }
+            }
+            super.beginMarkedContentSequence(tag, effectiveProperties);
+        }
     }
 
     /** Follows painted Form XObjects and inline images, including nested forms. */

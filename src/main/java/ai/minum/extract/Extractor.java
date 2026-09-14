@@ -51,7 +51,7 @@ public interface Extractor {
             if (config.getOcr() == null) {
                 throw new IllegalStateException("OCR is enabled but no OCR backend is configured");
             }
-            imageContent = config.getOcr().doOrc(result.getData());
+            imageContent = config.getOcr().doOrc(result.getData(), result.getMimeType().getMimeType());
             if (imageContent == null) {
                 imageContent = "";
             }
@@ -89,6 +89,14 @@ public interface Extractor {
 
     default ImageResult toImageResult(PDImageXObject img) throws IOException {
         String suffix = img.getSuffix();
+        if ("jpx".equalsIgnoreCase(suffix) || "jp2".equalsIgnoreCase(suffix)) {
+            // Preserve the JP2 codestream and stop PDFBox before JPXDecode. This keeps full-page
+            // scans small and lets OCR/upload backends that support JPEG 2000 handle them without
+            // requiring a license-sensitive ImageIO codec in Mika's fat jar.
+            try (InputStream input = img.createInputStream(List.of(COSName.JPX_DECODE.getName()))) {
+                return ImageResult.of(input.readAllBytes(), ImageResult.Format.JPEG2000);
+            }
+        }
         if ("jpg".equalsIgnoreCase(suffix) || "jpeg".equalsIgnoreCase(suffix)) {
             // Keep DCT-compressed scans in their original representation. Decoding a full-page JPEG and
             // re-encoding it as PNG can inflate a 1 MiB source to tens of MiB and trip the configured

@@ -30,6 +30,7 @@ public class ImageResult {
     @Getter
     public enum Format {
         JPEG("image/jpeg"),
+        JPEG2000("image/jp2"),
         BMP("image/bmp"),
         PNG("image/png"),
         TIFF("image/tiff"),

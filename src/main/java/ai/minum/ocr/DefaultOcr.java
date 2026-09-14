@@ -27,6 +27,10 @@ public class DefaultOcr {
     }
 
     public String doOrc(InputStream stream) {
+        return doOrc(stream, ContentType.APPLICATION_OCTET_STREAM, "image.png");
+    }
+
+    private String doOrc(InputStream stream, ContentType contentType, String filename) {
         CloseableHttpClient httpClient = HttpClients.custom()
                 .setRetryHandler(new DefaultHttpRequestRetryHandler(2, false))
                 .setDefaultRequestConfig(RequestConfig.custom()
@@ -38,8 +42,8 @@ public class DefaultOcr {
         builder.addBinaryBody(
                 "file",
                 stream,
-                ContentType.APPLICATION_OCTET_STREAM,
-                "image.png");
+                contentType,
+                filename);
         HttpEntity multipart = builder.build();
         upload.setEntity(multipart);
         CloseableHttpResponse response = null;
@@ -86,6 +90,21 @@ public class DefaultOcr {
 
     public String doOrc(byte[] pictureData) {
         return doOrc(new ByteArrayInputStream(pictureData));
+    }
+
+    public String doOrc(byte[] pictureData, String mimeType) {
+        String normalized = mimeType == null ? "application/octet-stream" : mimeType;
+        String extension = switch (normalized.toLowerCase(java.util.Locale.ROOT)) {
+            case "image/jpeg" -> "jpg";
+            case "image/jp2" -> "jp2";
+            case "image/gif" -> "gif";
+            case "image/bmp" -> "bmp";
+            case "image/tiff" -> "tiff";
+            case "image/webp" -> "webp";
+            default -> "png";
+        };
+        return doOrc(new ByteArrayInputStream(pictureData), ContentType.create(normalized),
+                "image." + extension);
     }
 }
 
