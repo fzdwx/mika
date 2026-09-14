@@ -1,5 +1,6 @@
 package ai.minum.extract;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -15,9 +16,11 @@ import java.util.regex.Pattern;
 /**
  * Recovers text from the flat binary format written by Word for Windows 2.x.
  *
- * <p>Unlike Word 6 and later DOC files, a normal Word 2 file is not an OLE2 container. Its FIB is
- * followed by a contiguous text section. Formatting tables are deliberately not interpreted here;
- * the extractor uses the FIB bounds so binary formatting data can never leak into the result.</p>
+ * <p>Unlike Word 6 and later DOC files, a Word 2 file is not an OLE2 container. Normally its FIB is
+ * followed by a contiguous text section; fast-saved files instead map character positions to
+ * disjoint byte ranges through a CLX piece table. Formatting tables are deliberately not
+ * interpreted here, so binary formatting data can never leak into the result. Main text, footnotes,
+ * headers/footers, and annotations are retained; executable WordBasic macro streams are skipped.</p>
  */
 final class Word2Extract {
     private static final int WORD2_IDENT = 0xa5db;
@@ -30,6 +33,8 @@ final class Word2Extract {
     private static final char BULLET_MARKER = '\ue000';
     private static final char PAGE_BREAK_MARKER = '\ue001';
     private static final char IMAGE_MARKER = '\ue002';
+    private static final char CELL_MARKER = '\ue003';
+    private static final char ROW_MARKER = '\ue004';
     private static final Pattern SYMBOL_FIELD = Pattern.compile("(?i)^\\s*SYMBOL\\s+(\\d+)(?:\\s|$)");
 
     private Word2Extract() {
@@ -44,31 +49,22 @@ final class Word2Extract {
     static ExtractResult extract(InputStream stream) throws IOException {
         byte[] document = stream.readAllBytes();
         Header header = Header.read(document);
-        if (header.complex()) {
-            throw new UnsupportedOperationException(
-                    "Fast-saved Word 2.0 documents are not supported; open and save the file normally before extraction");
-        }
         if (header.encrypted()) {
             throw new UnsupportedOperationException("Encrypted Word 2.0 documents are not supported");
         }
 
         int bytesPerCharacter = header.extendedCharacters() ? 2 : 1;
-        long textByteCount = Math.multiplyExact((long) header.mainTextCharacters(), bytesPerCharacter);
-        long textEnd = Math.addExact((long) header.textStart(), textByteCount);
-        if (header.textStart() < MIN_FIB_SIZE
-                || textEnd > header.textEnd()
-                || header.textEnd() > document.length) {
-            throw invalid("text bounds are outside the file");
-        }
-
         Charset charset = header.extendedCharacters()
                 ? StandardCharsets.UTF_16LE
                 : charset(header.characterSet(), header.languageId());
-        DecodedText decoded = decode(document, header.textStart(), Math.toIntExact(textByteCount), charset);
-        String rawText = decoded.text();
-        boolean containsPicture = header.hasPictures() || rawText.indexOf('\u0001') >= 0;
-        String markdown = toMarkdown(rawText);
-        if (header.hasPictures() && rawText.indexOf('\u0001') < 0) {
+        DecodedText decoded = header.complex()
+                ? decodePieceTable(document, header, bytesPerCharacter, charset)
+                : decodeContiguousText(document, header, bytesPerCharacter, charset);
+        DocumentText text = DocumentText.split(decoded.text(), header);
+        boolean hasInlinePicture = text.visibleText().indexOf('\u0001') >= 0;
+        boolean containsPicture = header.hasPictures() || hasInlinePicture;
+        String markdown = text.toMarkdown();
+        if (header.hasPictures() && !hasInlinePicture) {
             markdown = markdown.isBlank() ? "[Image][ImageEnd]" : markdown + "\n\n[Image][ImageEnd]";
         }
         ExtractResult result = ExtractResult.successOfOne(markdown)
@@ -81,6 +77,115 @@ final class Word2Extract {
             result.addWarning("Word 2.0 text was extracted, but legacy picture data could not be decoded");
         }
         return result;
+    }
+
+    private static DecodedText decodeContiguousText(
+            byte[] document, Header header, int bytesPerCharacter, Charset charset) {
+        long textByteCount = Math.multiplyExact((long) header.totalCharacters(), bytesPerCharacter);
+        long textEnd = Math.addExact((long) header.textStart(), textByteCount);
+        if (header.textStart() < MIN_FIB_SIZE
+                || textEnd > header.textEnd()
+                || header.textEnd() > document.length) {
+            throw invalid("text bounds are outside the file");
+        }
+        byte[] textBytes = java.util.Arrays.copyOfRange(
+                document, header.textStart(), Math.toIntExact(textEnd));
+        return decodeDocumentBytes(textBytes, header, bytesPerCharacter, charset);
+    }
+
+    private static DecodedText decodePieceTable(
+            byte[] document, Header header, int bytesPerCharacter, Charset charset) {
+        int clxStart = header.complexTableStart();
+        int clxLength = header.complexTableLength();
+        long clxEnd = Math.addExact((long) clxStart, clxLength);
+        if (clxStart < MIN_FIB_SIZE || clxLength < 3 || clxEnd > document.length) {
+            throw invalid("fast-save table is outside the file");
+        }
+
+        int cursor = clxStart;
+        while (cursor < clxEnd) {
+            int recordType = Byte.toUnsignedInt(document[cursor++]);
+            if (cursor + 2 > clxEnd) {
+                throw invalid("truncated fast-save table record");
+            }
+            int recordLength = unsignedShort(document, cursor);
+            cursor += 2;
+            if ((long) cursor + recordLength > clxEnd) {
+                throw invalid("fast-save table record is outside the CLX");
+            }
+            if (recordType == 2) {
+                return decodePieces(document, cursor, recordLength, header,
+                        bytesPerCharacter, charset);
+            }
+            cursor += recordLength;
+        }
+        throw invalid("fast-save table has no piece table");
+    }
+
+    private static DecodedText decodePieces(
+            byte[] document, int tableStart, int tableLength, Header header,
+            int bytesPerCharacter, Charset charset) {
+        int characterCount = header.totalCharacters();
+        if (tableLength < 4 || (tableLength - 4) % 12 != 0) {
+            throw invalid("malformed fast-save piece table length");
+        }
+        int pieceCount = (tableLength - 4) / 12;
+        int descriptorStart = tableStart + Math.multiplyExact(pieceCount + 1, 4);
+        if (pieceCount == 0) {
+            if (characterCount == 0) {
+                return new DecodedText("", false);
+            }
+            throw invalid("empty fast-save piece table");
+        }
+
+        int previousPosition = signedInt(document, tableStart);
+        if (previousPosition != 0) {
+            throw invalid("fast-save piece table does not start at character zero");
+        }
+        int lastPosition = signedInt(document, tableStart + pieceCount * 4);
+        if (lastPosition < characterCount) {
+            throw invalid("fast-save piece table is shorter than the declared text");
+        }
+
+        int expectedBytes = Math.toIntExact(Math.multiplyExact(
+                (long) characterCount, bytesPerCharacter));
+        ByteArrayOutputStream textBytes = new ByteArrayOutputStream(expectedBytes);
+        for (int piece = 0; piece < pieceCount && previousPosition < characterCount; piece++) {
+            int nextPosition = signedInt(document, tableStart + (piece + 1) * 4);
+            if (nextPosition < previousPosition) {
+                throw invalid("fast-save character positions are not sorted");
+            }
+            int endPosition = Math.min(nextPosition, characterCount);
+            int pieceCharacters = endPosition - previousPosition;
+            if (pieceCharacters > 0) {
+                int descriptor = descriptorStart + piece * 8;
+                int fileOffset = signedInt(document, descriptor + 2);
+                int byteCount = Math.multiplyExact(pieceCharacters, bytesPerCharacter);
+                long pieceEnd = Math.addExact((long) fileOffset, byteCount);
+                if (fileOffset < MIN_FIB_SIZE || pieceEnd > document.length) {
+                    throw invalid("fast-save text piece is outside the file");
+                }
+                textBytes.write(document, fileOffset, byteCount);
+            }
+            previousPosition = nextPosition;
+        }
+        if (textBytes.size() != expectedBytes) {
+            throw invalid("fast-save pieces do not cover the main text");
+        }
+        byte[] joined = textBytes.toByteArray();
+        return decodeDocumentBytes(joined, header, bytesPerCharacter, charset);
+    }
+
+    private static DecodedText decodeDocumentBytes(
+            byte[] textBytes, Header header, int bytesPerCharacter, Charset charset) {
+        int macroStart = Math.multiplyExact(
+                Math.addExact(Math.addExact(header.mainTextCharacters(), header.footnoteCharacters()),
+                        header.headerCharacters()),
+                bytesPerCharacter);
+        int macroEnd = Math.addExact(macroStart,
+                Math.multiplyExact(header.macroCharacters(), bytesPerCharacter));
+        java.util.Arrays.fill(textBytes, macroStart, macroEnd, (byte) 0);
+        return decode(textBytes, 0, textBytes.length, charset);
     }
 
     private static DecodedText decode(byte[] document, int offset, int length, Charset charset) {
@@ -109,7 +214,7 @@ final class Word2Extract {
     }
 
     static String toMarkdown(String rawText) {
-        String fieldsResolved = resolveFields(rawText);
+        String fieldsResolved = normalizeTableControls(resolveFields(rawText));
         StringBuilder normalized = new StringBuilder(fieldsResolved.length());
         for (int index = 0; index < fieldsResolved.length(); index++) {
             char character = fieldsResolved.charAt(index);
@@ -122,13 +227,14 @@ final class Word2Extract {
                 }
                 case '\n', '\t' -> normalized.append(character);
                 case '\u0001' -> normalized.append(IMAGE_MARKER);
-                case '\u0007' -> normalized.append('\t');
                 case '\u000b', '\u000e' -> normalized.append('\n');
                 case '\u000c' -> normalized.append('\n').append(PAGE_BREAK_MARKER).append('\n');
                 case '\u001e' -> normalized.append('\u2011');
                 case '\u001f' -> {
                     // Optional hyphen: omit unless Word chose to render it at a line break.
                 }
+                case CELL_MARKER -> normalized.append(CELL_MARKER);
+                case ROW_MARKER -> normalized.append('\n');
                 default -> {
                     if (character >= 0x20 || character == BULLET_MARKER) {
                         normalized.append(character);
@@ -147,6 +253,15 @@ final class Word2Extract {
         return tabularParagraphsToMarkdown(markdown.strip());
     }
 
+    private static String normalizeTableControls(String text) {
+        String cell = String.valueOf(CELL_MARKER);
+        String row = String.valueOf(ROW_MARKER);
+        return text.replace("\r\u0007", cell)
+                .replace("\u0007", cell)
+                .replaceAll("[\\r\\n]*" + cell + "[\\r\\n]*" + cell + "[\\r\\n]*", row)
+                .replaceAll("[\\r\\n]*" + cell + "[\\r\\n]*", cell);
+    }
+
     private static String tabularParagraphsToMarkdown(String markdown) {
         String[] lines = markdown.split("\\n", -1);
         StringBuilder output = new StringBuilder(markdown.length() + 128);
@@ -163,11 +278,10 @@ final class Word2Extract {
                     || output.charAt(output.length() - 2) != '\n')) {
                 output.append('\n');
             }
-            appendTableRow(output, new String[columns]);
+            appendTableRow(output, cells);
             String[] separator = new String[columns];
             java.util.Arrays.fill(separator, "---");
             appendTableRow(output, separator);
-            appendTableRow(output, cells);
             index++;
             while (index < lines.length) {
                 if (lines[index].isBlank()) {
@@ -191,17 +305,26 @@ final class Word2Extract {
                 appendTableRow(output, nextCells);
                 index++;
             }
+            if (index < lines.length && !lines[index].isBlank()) {
+                output.append('\n');
+            }
         }
         return output.toString().replaceAll("\\n{3,}", "\n\n").strip();
     }
 
     private static String[] tableCells(String line) {
-        String[] cells = line.strip().split("\\t", -1);
+        boolean explicitTableCells = line.indexOf(CELL_MARKER) >= 0;
+        String[] cells = explicitTableCells
+                ? line.strip().split(Pattern.quote(String.valueOf(CELL_MARKER)), -1)
+                : line.strip().split("\\t", -1);
         int nonEmpty = 0;
         for (String cell : cells) {
             if (!cell.isBlank()) {
                 nonEmpty++;
             }
+        }
+        if (explicitTableCells) {
+            return cells.length >= 2 && nonEmpty >= 1 ? cells : null;
         }
         return cells.length >= 4 && nonEmpty >= 3 ? cells : null;
     }
@@ -317,6 +440,9 @@ final class Word2Extract {
             if (hasResult) {
                 return result.toString();
             }
+            if (instruction.indexOf("\u0001") >= 0) {
+                return String.valueOf(IMAGE_MARKER);
+            }
             Matcher symbol = SYMBOL_FIELD.matcher(instruction);
             if (symbol.find() && "183".equals(symbol.group(1))) {
                 return String.valueOf(BULLET_MARKER);
@@ -328,15 +454,67 @@ final class Word2Extract {
     private record DecodedText(String text, boolean replacedInvalidBytes) {
     }
 
+    private record DocumentText(String main, String footnotes, String headers, String annotations) {
+        private static DocumentText split(String text, Header header) {
+            int mainEnd = header.mainTextCharacters();
+            int footnotesEnd = Math.addExact(mainEnd, header.footnoteCharacters());
+            int headersEnd = Math.addExact(footnotesEnd, header.headerCharacters());
+            int macrosEnd = Math.addExact(headersEnd, header.macroCharacters());
+            int annotationsEnd = Math.addExact(macrosEnd, header.annotationCharacters());
+            if (annotationsEnd != text.length()) {
+                throw invalid("decoded text length does not match the FIB subdocuments");
+            }
+            return new DocumentText(
+                    text.substring(0, mainEnd),
+                    text.substring(mainEnd, footnotesEnd),
+                    text.substring(footnotesEnd, headersEnd),
+                    text.substring(macrosEnd, annotationsEnd));
+        }
+
+        private String visibleText() {
+            return main + footnotes + headers + annotations;
+        }
+
+        private String toMarkdown() {
+            StringBuilder output = new StringBuilder();
+            append(output, null, main);
+            append(output, "Footnotes", footnotes);
+            append(output, "Headers and footers", headers);
+            append(output, "Comments", annotations);
+            return output.toString();
+        }
+
+        private static void append(StringBuilder output, String heading, String text) {
+            String markdown = Word2Extract.toMarkdown(text);
+            if (markdown.isBlank()) {
+                return;
+            }
+            if (!output.isEmpty()) {
+                output.append("\n\n");
+            }
+            if (heading != null) {
+                output.append("## ").append(heading).append("\n\n");
+            }
+            output.append(markdown);
+        }
+    }
+
     private record Header(int languageId, int flags, int secondaryFlags, int characterSet,
-                          int textStart, int textEnd, int mainTextCharacters) {
+                          int textStart, int textEnd, int mainTextCharacters, int footnoteCharacters,
+                          int headerCharacters, int macroCharacters, int annotationCharacters,
+                          int complexTableStart, int complexTableLength) {
         private static Header read(byte[] document) {
             if (document.length < MIN_FIB_SIZE || !supports(document)) {
                 throw invalid("missing or truncated FIB");
             }
             int mainTextCharacters = signedInt(document, 52);
-            if (mainTextCharacters < 0) {
-                throw invalid("negative main text length");
+            int footnoteCharacters = signedInt(document, 56);
+            int headerCharacters = signedInt(document, 60);
+            int macroCharacters = signedInt(document, 64);
+            int annotationCharacters = signedInt(document, 68);
+            if (mainTextCharacters < 0 || footnoteCharacters < 0 || headerCharacters < 0
+                    || macroCharacters < 0 || annotationCharacters < 0) {
+                throw invalid("negative subdocument text length");
             }
             return new Header(
                     unsignedShort(document, 6),
@@ -345,7 +523,19 @@ final class Word2Extract {
                     unsignedShort(document, 20),
                     signedInt(document, 24),
                     signedInt(document, 28),
-                    mainTextCharacters);
+                    mainTextCharacters,
+                    footnoteCharacters,
+                    headerCharacters,
+                    macroCharacters,
+                    annotationCharacters,
+                    signedInt(document, 286),
+                    unsignedShort(document, 290));
+        }
+
+        private int totalCharacters() {
+            return Math.addExact(
+                    Math.addExact(Math.addExact(mainTextCharacters, footnoteCharacters), headerCharacters),
+                    Math.addExact(macroCharacters, annotationCharacters));
         }
 
         private boolean complex() {

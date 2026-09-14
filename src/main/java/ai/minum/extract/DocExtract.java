@@ -7,7 +7,12 @@ import java.io.InputStream;
 public class DocExtract extends TikaExtractor {
     @Override
     public boolean support(String mimeType) {
-        return "doc".equals(mimeType) || "application/msword".equals(mimeType);
+        return "doc".equals(mimeType)
+                || "dot".equals(mimeType)
+                || "application/msword".equals(mimeType)
+                || "application/vnd.ms-word".equals(mimeType)
+                || "application/vnd.ms-word.template".equals(mimeType)
+                || "application/x-dot".equals(mimeType);
     }
 
     @Override

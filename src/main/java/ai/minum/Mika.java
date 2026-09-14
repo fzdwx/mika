@@ -50,7 +50,8 @@ public class Mika {
         String type = mimeType.split(";", 2)[0].strip().toLowerCase(Locale.ROOT);
         return switch (type) {
             case "application/pdf" -> "pdf";
-            case "application/msword" -> "doc";
+            case "application/msword", "application/vnd.ms-word" -> "doc";
+            case "application/vnd.ms-word.template", "application/x-dot" -> "dot";
             case "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> "docx";
             case "md", "text/markdown", "text/x-markdown" -> "markdown";
             case "image/png", "image/jpeg", "image/jpg", "image/bmp", "image/webp", "image/gif", "image/tiff" -> type.substring(6);

@@ -3,6 +3,8 @@ package ai.minum;
 import ai.minum.extract.ExtractConfig;
 import ai.minum.extract.ExtractResult;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
@@ -95,6 +97,19 @@ class MikaTest {
         assertTrue(result.isError());
         assertTrue(result.getErrorMessage().contains("Extracted content size limit exceeded"),
                 result.getErrorMessage());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"dot", "application/vnd.ms-word", "application/vnd.ms-word.template", "application/x-dot"})
+    void routesLegacyWordTemplatesToTheDocExtractor(String type) throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/poi-word2.doc")) {
+            assertNotNull(input);
+
+            ExtractResult result = Mika.extract(type, input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("Member of 3GPP (ARIB)"), result.getMarkdown());
+        }
     }
 
     private static ExtractResult extract(String type, String content) {
