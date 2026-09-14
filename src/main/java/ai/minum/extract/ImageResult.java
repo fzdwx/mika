@@ -1,6 +1,5 @@
 package ai.minum.extract;
 
-import lombok.Data;
 import lombok.Getter;
 import org.apache.poi.hwpf.usermodel.PictureType;
 
@@ -34,6 +33,8 @@ public class ImageResult {
         BMP("image/bmp"),
         PNG("image/png"),
         TIFF("image/tiff"),
+        GIF("image/gif"),
+        WEBP("image/webp"),
         UNKNOWN("application/octet-stream"),
         ;
 
@@ -43,12 +44,22 @@ public class ImageResult {
             this.mimeType = mimeType;
         }
 
+        public static Format fromMimeType(String mimeType) {
+            for (Format format : values()) {
+                if (format.mimeType.equalsIgnoreCase(mimeType)) {
+                    return format;
+                }
+            }
+            return UNKNOWN;
+        }
+
         public static Format from(PictureType pictureType) {
             return switch (pictureType) {
                 case PictureType.JPEG -> JPEG;
                 case PictureType.BMP -> BMP;
                 case PictureType.PNG -> PNG;
                 case PictureType.TIFF -> TIFF;
+                case PictureType.GIF -> GIF;
                 default -> UNKNOWN;
             };
         }
@@ -59,6 +70,7 @@ public class ImageResult {
                 case BMP -> BMP;
                 case PNG -> PNG;
                 case TIFF -> TIFF;
+                case GIF -> GIF;
                 default -> UNKNOWN;
             };
         }

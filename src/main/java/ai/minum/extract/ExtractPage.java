@@ -3,6 +3,7 @@ package ai.minum.extract;
 public class ExtractPage {
 
     private Long page;
+    // Markdown content; page is a physical page only for paginated extractors such as PDF.
     private String content;
 
     public ExtractPage(String content, Long page) {

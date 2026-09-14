@@ -1,21 +1,31 @@
 package ai.minum.extract;
 
+import ai.minum.Mika;
+import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.PDFormContentStream;
+import org.apache.pdfbox.pdmodel.PDResources;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
+import org.apache.pdfbox.pdmodel.graphics.image.PDInlineImage;
+import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.junit.jupiter.api.Test;
 
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 class PDFExtractTest {
 
@@ -33,13 +43,78 @@ class PDFExtractTest {
         };
 
         ExtractResult result = extractor.extract(
-                ExtractConfig.defaultConfig().ocr(false),
+                ExtractConfig.defaultConfig().imageUploader(image -> "image.png"),
                 new ByteArrayInputStream(pdf)
         );
 
         assertFalse(result.isError(), result.getErrorMessage());
         assertTrue(result.hasImage());
         assertTrue(result.getPages().getFirst().getContent().contains("kept text"));
+        assertEquals(1, result.getWarnings().size());
+    }
+
+    @Test
+    void doesNotDecodeImagesWhenOnlyExtractingText() throws Exception {
+        PDFExtract extractor = new PDFExtract() {
+            @Override
+            public ImageResult toImageResult(PDImageXObject image) {
+                fail("Text-only extraction must not decode images");
+                return null;
+            }
+        };
+        ExtractResult result = extractor.extract(ExtractConfig.defaultConfig(),
+                new ByteArrayInputStream(createPdfWithTextAndImage()));
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(result.hasImage());
+        assertTrue(result.getMarkdown().contains("kept text"));
+    }
+
+    @Test
+    void findsNestedAndInlineImagesAndRetainsBlankPhysicalPages() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            document.addPage(new PDPage());
+            PDImageXObject image = LosslessFactory.createFromImage(document,
+                    new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB));
+            PDFormXObject inner = new PDFormXObject(document);
+            inner.setBBox(new PDRectangle(100, 100));
+            inner.setResources(new PDResources());
+            try (PDFormContentStream content = new PDFormContentStream(inner)) {
+                content.drawImage(image, 0, 0, 20, 20);
+            }
+            PDFormXObject outer = new PDFormXObject(document);
+            outer.setBBox(new PDRectangle(100, 100));
+            outer.setResources(new PDResources());
+            try (PDFormContentStream content = new PDFormContentStream(outer)) {
+                content.drawForm(inner);
+            }
+            COSDictionary dictionary = new COSDictionary();
+            dictionary.setInt(COSName.W, 1);
+            dictionary.setInt(COSName.H, 1);
+            dictionary.setInt(COSName.BPC, 8);
+            dictionary.setItem(COSName.CS, COSName.RGB);
+            PDInlineImage inline = new PDInlineImage(dictionary, new byte[]{0, 0, 0}, new PDResources());
+            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                content.drawForm(outer);
+                content.drawForm(outer); // Shared images are processed once per page.
+                content.drawImage(inline, 100, 100, 20, 20);
+            }
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+        AtomicInteger uploads = new AtomicInteger();
+        ExtractResult result = Mika.extract("application/pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig().imageUploader(image -> "images/" + uploads.incrementAndGet() + ".png"));
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertEquals(2, uploads.get());
+        assertTrue(result.getMarkdown().contains("[Image](images/1.png)[ImageEnd]"), result.getMarkdown());
+        assertTrue(result.hasImage());
+        assertFalse(result.hasTable(), "A Form XObject is not evidence of a table");
+        assertEquals(2, result.getPages().size());
+        assertEquals(1L, result.getPages().get(1).getPage());
+        assertTrue(result.getPages().get(1).getContent().isEmpty());
     }
 
     @Test

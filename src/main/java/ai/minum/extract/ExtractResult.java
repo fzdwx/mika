@@ -2,6 +2,7 @@ package ai.minum.extract;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 public class ExtractResult {
 
@@ -11,6 +12,7 @@ public class ExtractResult {
 
     private boolean hasImage;
     private boolean hasTable;
+    private final List<String> warnings = new ArrayList<>();
 
     private ExtractResult(List<ExtractPage> pages, boolean status, String errorMessage) {
         this.pages = pages;
@@ -23,7 +25,21 @@ public class ExtractResult {
     }
 
     public static ExtractResult error(Exception e) {
-        return error(e.getMessage());
+        if (e == null) {
+            return error("Unknown extraction error");
+        }
+        Throwable current = e;
+        String message = null;
+        while (current != null) {
+            if (current.getMessage() != null && !current.getMessage().isBlank()) {
+                message = current.getMessage();
+            }
+            if (current.getCause() == current) {
+                break;
+            }
+            current = current.getCause();
+        }
+        return error(message == null ? e.getClass().getSimpleName() : message);
     }
 
     public static ExtractResult of() {
@@ -45,6 +61,31 @@ public class ExtractResult {
 
     public List<ExtractPage> getPages() {
         return pages;
+    }
+
+    /** All page contents are Markdown. Page indices remain available through getPages(). */
+    public String getMarkdown() {
+        if (pages == null) {
+            return "";
+        }
+        return pages.stream()
+                .map(ExtractPage::getContent)
+                .filter(content -> content != null && !content.isBlank())
+                .collect(Collectors.joining("\n\n"));
+    }
+
+    public String getContentType() {
+        return "text/markdown";
+    }
+
+    public List<String> getWarnings() {
+        return List.copyOf(warnings);
+    }
+
+    public void addWarning(String warning) {
+        if (!warnings.contains(warning)) {
+            warnings.add(warning);
+        }
     }
 
     public boolean isError() {

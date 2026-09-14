@@ -4,6 +4,9 @@ import ai.minum.ocr.DefaultOcr;
 
 public class ExtractConfig {
 
+    private long maxExtractInputSize = 100L * 1024 * 1024;
+    private int maxExtractedContentSize = 32 * 1024 * 1024;
+
     // 是否提取图片
     private boolean extractImage = false;
     // 图像提取最大大小 1MB
@@ -11,7 +14,7 @@ public class ExtractConfig {
     // OCR 实例
     private DefaultOcr ocr;
 
-    // 是否回退，使用 tika 纯文本提取
+    // 是否对其他格式使用 Tika 结构提取并转换成 Markdown
     private boolean fallback = true;
 
     private ImageUploader imageUploader;
@@ -47,6 +50,44 @@ public class ExtractConfig {
 
     public static ExtractConfig defaultConfig() {
         return new ExtractConfig();
+    }
+
+    ExtractConfig copyForExtraction() {
+        ExtractConfig copy = new ExtractConfig();
+        copy.extractImage = extractImage;
+        copy.imageExtractMaxSize = imageExtractMaxSize;
+        copy.ocr = ocr;
+        copy.fallback = fallback;
+        copy.imageUploader = imageUploader;
+        copy.uploadImage = uploadImage;
+        copy.maxHandleImageCount = maxHandleImageCount;
+        copy.maxExtractInputSize = maxExtractInputSize;
+        copy.maxExtractedContentSize = maxExtractedContentSize;
+        return copy;
+    }
+
+    public long maxExtractInputSize() {
+        return maxExtractInputSize;
+    }
+
+    public ExtractConfig maxExtractInputSize(long maxExtractInputSize) {
+        if (maxExtractInputSize <= 0) {
+            throw new IllegalArgumentException("File size limit must be positive");
+        }
+        this.maxExtractInputSize = maxExtractInputSize;
+        return this;
+    }
+
+    public int maxExtractedContentSize() {
+        return maxExtractedContentSize;
+    }
+
+    public ExtractConfig maxExtractedContentSize(int maxExtractedContentSize) {
+        if (maxExtractedContentSize <= 0) {
+            throw new IllegalArgumentException("Extracted content size limit must be positive");
+        }
+        this.maxExtractedContentSize = maxExtractedContentSize;
+        return this;
     }
 
     public boolean fallback() {
@@ -101,6 +142,9 @@ public class ExtractConfig {
     }
 
     public ExtractConfig imageExtractMaxSize(int imageExtractMaxSize) {
+        if (imageExtractMaxSize < 0) {
+            throw new IllegalArgumentException("Image size limit must not be negative");
+        }
         this.imageExtractMaxSize = imageExtractMaxSize;
         return this;
     }

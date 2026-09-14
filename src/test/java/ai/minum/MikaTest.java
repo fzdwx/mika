@@ -1,73 +1,104 @@
 package ai.minum;
 
 import ai.minum.extract.ExtractConfig;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.cos.COSName;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.PDPage;
-import org.apache.pdfbox.pdmodel.PDResources;
-import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
+import ai.minum.extract.ExtractResult;
 import org.junit.jupiter.api.Test;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.*;
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+
+import static org.junit.jupiter.api.Assertions.*;
 
 class MikaTest {
-
     @Test
-    void extract() throws FileNotFoundException {
-        String path = "/home/like/project/mika/私人股权投资.pdf";
-        FileInputStream stream = new FileInputStream(path);
-        cost(() -> {
-            ExtractConfig config = ExtractConfig
-                    .defaultConfig()
-                    .ocrUrl("http://192.168.50.191:15234/file/ocr")
-                    .imageExtractMaxSize(Integer.MAX_VALUE)
-                    .ocr(true);
-            var result = Mika.extract("pdf", new BufferedInputStream(stream), config);
-            System.out.println(result);
-        });
+    void preservesExistingMarkdownAndReadsUtf8Bom() {
+        String markdown = "# 中文标题\n\n- 项目\n\n```java\nString a = \"x\";\n```\n";
+        ExtractResult result = extract(" Text/Markdown; charset=UTF-8 ", "\uFEFF" + markdown);
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertEquals(markdown, result.getMarkdown());
+        assertEquals("text/markdown", result.getContentType());
     }
 
-    static void cost(Runnable runnable) {
-        long start = System.currentTimeMillis();
-        runnable.run();
-        long end = System.currentTimeMillis();
-        System.out.println("cost time: " + (end - start) + "ms");
+    @Test
+    void convertsHtmlHeadingsListsLinksAndTablesToMarkdown() {
+        String html = "<html><body><h1>中文标题</h1><p>参阅 <a href='https://example.com/docs'>文档</a></p>"
+                + "<ul><li>项目一</li><li>项目二</li></ul>"
+                + "<table><tr><th>名称</th><th>值</th></tr><tr><td>温度</td><td>20</td></tr></table>"
+                + "</body></html>";
+        ExtractResult result = extract("html", html);
+        assertFalse(result.isError(), result.getErrorMessage());
+        String markdown = result.getMarkdown();
+        assertTrue(markdown.contains("# 中文标题"), markdown);
+        assertTrue(markdown.contains("- 项目一"), markdown);
+        assertTrue(markdown.contains("[文档](https://example.com/docs)"), markdown);
+        assertTrue(markdown.contains("|"), markdown);
+        assertTrue(markdown.contains("温度"), markdown);
+        assertTrue(result.hasTable());
     }
 
+    @Test
+    void retainsTheEndOfLongTextBeyondTikasDefaultLimit() {
+        String content = "long paragraph 内容\n".repeat(10_000) + "\nEND_OF_DOCUMENT";
+        ExtractResult result = extract("txt", content);
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(result.getMarkdown().contains("END"), result.getErrorMessage());
+        assertTrue(result.getMarkdown().length() > 100_000);
+        assertTrue(result.getMarkdown().endsWith("END\\_OF\\_DOCUMENT"), result.getMarkdown().substring(result.getMarkdown().length() - 100));
+    }
 
     @Test
-    void test222() throws FileNotFoundException {
-        String path = "/home/like/project/mika/简历-Java开发.pdf";
-        FileInputStream stream = new FileInputStream(path);
-        try (PDDocument doc = Loader.loadPDF(stream.readAllBytes())) {
-            int pageNum = 0;
-            int imageCounter = 1;
+    void keepsSourceMarkdownSeparateFromLiteralPlainText() {
+        ExtractResult result = extract("txt", "# literal *text* <tag>\n");
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(result.getMarkdown().contains("\\*text\\*"), result.getMarkdown());
+    }
 
-            // 遍历所有页面
-            for (PDPage page : doc.getPages()) {
-                pageNum++;
-                PDResources resources = page.getResources();
+    @Test
+    void retainsPlainTextLineAndParagraphBoundaries() {
+        ExtractResult result = extract("txt", "第一行\n第二行\n\n下一段\n===\n");
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(result.getMarkdown().contains("第一行\n第二行\n\n下一段"), result.getMarkdown());
+        assertTrue(result.getMarkdown().contains("\\==="), result.getMarkdown());
+    }
 
-                // 获取页面中的所有XObject（图像和表单）
-                Iterable<COSName> xObjectNames = resources.getXObjectNames();
-                for (COSName name : xObjectNames) {
-                    if (resources.isImageXObject(name)) {
-                        // 提取图像对象
-                        PDImageXObject image = (PDImageXObject) resources.getXObject(name);
-                        BufferedImage bufferedImage = image.getImage();
+    @Test
+    void retainsMergedHtmlCellsUsingHtmlInsideMarkdown() {
+        ExtractResult result = extract("html", "<h1>合并表格</h1><table>"
+                + "<tr><td rowspan='2'>设备</td><td>甲</td></tr><tr><td>乙</td></tr></table>");
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(result.getMarkdown().contains("rowspan=\"2\""), result.getMarkdown());
+        assertTrue(result.getMarkdown().contains("甲") && result.getMarkdown().contains("乙"), result.getMarkdown());
+    }
 
-                        // 保存为PNG文件
-                        String outputPath = String.format("image_page%d_%d.png", pageNum, imageCounter++);
-                        ImageIO.write(bufferedImage, "PNG", new File(outputPath));
-                        System.out.println("保存图片至：" + outputPath);
-                    }
-                }
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+    @Test
+    void keepsUnsupportedTypeErrorWhenFallbackIsDisabled() {
+        ExtractResult result = Mika.extract("not-supported", new ByteArrayInputStream(new byte[0]),
+                ExtractConfig.defaultConfig().fallback(false));
+        assertTrue(result.isError());
+    }
+
+    @Test
+    void inputSizeLimitAppliesToMarkdownPath() {
+        ExtractResult result = Mika.extract("markdown", new ByteArrayInputStream("123456".getBytes(StandardCharsets.UTF_8)),
+                ExtractConfig.defaultConfig().maxExtractInputSize(5));
+
+        assertTrue(result.isError());
+        assertTrue(result.getErrorMessage().contains("File size limit exceeded"), result.getErrorMessage());
+    }
+
+    @Test
+    void serializedXhtmlSizeLimitIncludesMarkup() {
+        String html = "<br>".repeat(1_000);
+        ExtractResult result = Mika.extract("html", new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)),
+                ExtractConfig.defaultConfig().maxExtractedContentSize(256));
+
+        assertTrue(result.isError());
+        assertTrue(result.getErrorMessage().contains("Extracted content size limit exceeded"),
+                result.getErrorMessage());
+    }
+
+    private static ExtractResult extract(String type, String content) {
+        return Mika.extract(type, new ByteArrayInputStream(content.getBytes(StandardCharsets.UTF_8)),
+                ExtractConfig.defaultConfig());
     }
 }
