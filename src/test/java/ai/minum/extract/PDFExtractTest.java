@@ -17,11 +17,13 @@ import org.apache.pdfbox.pdmodel.graphics.image.PDInlineImage;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.junit.jupiter.api.Test;
 
+import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -31,6 +33,21 @@ class PDFExtractTest {
 
     private static final String COLOR_SPACE_ERROR =
             "Numbers of source Raster bands and source color space components do not match";
+
+    @Test
+    void keepsJpegScansCompressedForOcrAndUploadLimits() throws Exception {
+        BufferedImage bufferedImage = new BufferedImage(40, 40, BufferedImage.TYPE_INT_RGB);
+        ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
+        ImageIO.write(bufferedImage, "jpeg", jpeg);
+        try (PDDocument document = new PDDocument()) {
+            PDImageXObject image = PDImageXObject.createFromByteArray(document, jpeg.toByteArray(), "scan.jpg");
+
+            ImageResult result = new PDFExtract().toImageResult(image);
+
+            assertEquals(ImageResult.Format.JPEG, result.getMimeType());
+            assertArrayEquals(jpeg.toByteArray(), result.getData());
+        }
+    }
 
     @Test
     void skipsAnImageThatCannotBeDecodedAndKeepsThePageText() throws Exception {

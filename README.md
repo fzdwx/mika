@@ -53,7 +53,7 @@ config.ocrUrl("http://your-ocr-service/file/ocr");
 
 默认关闭图片上传和 OCR；设置 `imageUploader(...)` 会开启上传，设置 `ocrUrl(...)` 会开启 OCR。只设置 `ocr(true)` 而没有 OCR 后端时返回明确错误。Mika 不会自动调用本机 Tesseract。
 
-默认单张图片上限为 1 MiB，每次提取最多处理 100 张，数量 `-1` 表示不限制。复用 `ExtractConfig` 时每次提取使用独立计数，不会耗尽下一次调用的额度。跳过图片不改变 `hasImage()` 对文档包含图片的判断；大小、数量和格式限制会产生 warning。
+默认单张图片上限为 1 MiB，每次提取最多处理 100 张，数量 `-1` 表示不限制；data-extract 当前将单图上限配置为 5 MiB。PDF 中的 JPEG 扫描页会保留原始压缩数据，避免解码后转为 PNG 导致体积膨胀并被错误跳过。复用 `ExtractConfig` 时每次提取使用独立计数，不会耗尽下一次调用的额度。跳过图片不改变 `hasImage()` 对文档包含图片的判断；大小、数量和格式限制会产生 warning。
 
 启用图片上传或 OCR 时，Mika 会把输入暂存到系统临时目录并进行两遍流式解析：第一遍确定正文图片位置，第二遍只读取正文实际引用且位于数量预算内的图片。所有格式的输入默认上限为 100 MiB，可通过 `maxExtractInputSize(...)` 调整；Tika 序列化内容默认上限为 32 MiB，可通过 `maxExtractedContentSize(...)` 调整。临时文件在提取结束时删除，删除失败时登记 JVM 退出清理。嵌入附件不递归提取，应作为独立文件提交。
 

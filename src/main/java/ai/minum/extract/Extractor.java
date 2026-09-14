@@ -1,6 +1,7 @@
 package ai.minum.extract;
 
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
+import org.apache.pdfbox.cos.COSName;
 import org.apache.poi.hwpf.usermodel.Picture;
 import org.apache.poi.xwpf.usermodel.XWPFPictureData;
 import org.slf4j.Logger;
@@ -12,6 +13,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.List;
 
 public interface Extractor {
     final static Logger logger = LoggerFactory.getLogger(Extractor.class);
@@ -86,6 +88,16 @@ public interface Extractor {
     }
 
     default ImageResult toImageResult(PDImageXObject img) throws IOException {
+        String suffix = img.getSuffix();
+        if ("jpg".equalsIgnoreCase(suffix) || "jpeg".equalsIgnoreCase(suffix)) {
+            // Keep DCT-compressed scans in their original representation. Decoding a full-page JPEG and
+            // re-encoding it as PNG can inflate a 1 MiB source to tens of MiB and trip the configured
+            // upload/OCR limit even though the source image itself is within budget.
+            try (InputStream input = img.createInputStream(List.of(
+                    COSName.DCT_DECODE.getName(), COSName.DCT_DECODE_ABBREVIATION.getName()))) {
+                return ImageResult.of(input.readAllBytes(), ImageResult.Format.JPEG);
+            }
+        }
         BufferedImage image = img.getImage();
         if (image == null) {
             return ImageResult.of(new byte[]{}, ImageResult.Format.UNKNOWN);
