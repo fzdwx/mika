@@ -72,6 +72,26 @@ class OfficeMarkdownTest {
         }
     }
 
+    /** Apache POI test-data/document/test-fields.doc (Apache-2.0). */
+    @Test
+    void legacyDocFieldsKeepDisplayedResultsWithoutControlMarkers() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/poi-fields.doc")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("doc", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("Field in text box: 2"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("Footnote with field: Fridrich Strba"),
+                    result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("Field in comment: 19/11/2010"),
+                    result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("Field in EndNote. File size: 0"),
+                    result.getMarkdown());
+            assertFalse(result.getMarkdown().contains("MERGEFORMAT"), result.getMarkdown());
+            assertFalse(result.getMarkdown().contains("�"), result.getMarkdown());
+        }
+    }
+
     @Test
     void docxIncludesHtmlAltChunkBodyWithoutSyntheticPartName() throws Exception {
         try (var input = getClass().getResourceAsStream("/documents/tika-altchunk-html.docx")) {

@@ -28,7 +28,7 @@ try (var stream = Files.newInputStream(Path.of("操作手册.docx"))) {
 
 | 输入 | 输出与结构 |
 | --- | --- |
-| DOC / DOT / DOCX | Word 6 及以上经 Tika 结构提取后转换为 Markdown；Word 2.x 从 FIB 连续文本区或 FastSave piece table 恢复正文、脚注、页眉页脚和批注，并跳过 WordBasic 宏流；保留可解析的标题、段落、链接、表格、嵌套内容和图片位置；DOCX 使用 SAX 解析以兼容新式图表 |
+| DOC / DOT / DOCX | Word 6 及以上经 Tika 结构提取后转换为 Markdown，旧 DOC 域只保留实际显示值；Word 2.x 从 FIB 连续文本区或 FastSave piece table 恢复正文、脚注、页眉页脚和批注，并跳过 WordBasic 宏流；保留可解析的标题、段落、链接、表格、嵌套内容和图片位置；DOCX 使用 SAX 解析以兼容新式图表 |
 | XLS / XLSX、PPT / PPTX 等 Tika 支持的格式 | 从结构化 XHTML 转换为 Markdown，避免只提取一串纯文本 |
 | PDF | 按文档内容流保留阅读顺序；逐字断行或阿拉伯文、希伯来文等页面自动切换坐标排序；读取结构树 `/ActualText` 纠正无障碍 PDF 的错误字符；保留物理页，图片上传链接和 OCR 文字附在所在页末尾 |
 | Markdown | UTF-8 原样读取，仅去除文件开头的 BOM |
@@ -81,4 +81,4 @@ mvn test
 mvn package -DskipTests
 ```
 
-回归测试主要使用程序生成的 DOCX / XLSX / PPTX / PDF / PNG 和内嵌文本，并包含 Apache POI 的 ChartEx 与 Word 2.0 真实样本；OCR 测试使用临时本地 HTTP 服务，不连接业务系统。覆盖中文编码、长文本结尾、表格实际渲染、嵌套表格和图片、PDF 物理页和阅读顺序、图片限制、配置复用、Word 2.0 正文、子文档、FastSave、旧表格、代码页和错误边界，以及后端失败。
+回归测试主要使用程序生成的 DOCX / XLSX / PPTX / PDF / PNG 和内嵌文本，并包含 Apache POI 的 ChartEx、旧 DOC 域和 Word 2.0 真实样本；OCR 测试使用临时本地 HTTP 服务，不连接业务系统。覆盖中文编码、长文本结尾、表格实际渲染、嵌套表格和图片、PDF 物理页和阅读顺序、图片限制、配置复用、Word 2.0 正文、子文档、FastSave、旧表格、代码页和错误边界，以及后端失败。
