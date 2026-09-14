@@ -38,15 +38,24 @@ class OfficeMarkdownTest {
         }
     }
 
+    /** Apache POI test-data/document/word2.doc (Apache-2.0). */
     @Test
-    void reportsLegacyWord2InsteadOfReturningEmptySuccess() {
-        byte[] word2Header = {(byte) 0xdb, (byte) 0xa5, 0x2d, 0, 0, 0, 0, 0};
+    void extractsLegacyWord2Document() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/poi-word2.doc")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("doc", input, ExtractConfig.defaultConfig());
 
-        ExtractResult result = new DocExtract().extract(
-                ExtractConfig.defaultConfig(), new ByteArrayInputStream(word2Header));
-
-        assertTrue(result.isError());
-        assertTrue(result.getErrorMessage().contains("Word 2.0"), result.getErrorMessage());
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("Member of 3GPP (ARIB)"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("Mr. Frédéric Bonneau"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("| Mr. Benni Alexander | Nokia Japan Co, Ltd |"),
+                    result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("Organisation partner representative (ETSI)"),
+                    result.getMarkdown());
+            assertFalse(result.getMarkdown().contains("�"), result.getMarkdown());
+            assertTrue(result.hasTable());
+            assertTrue(render(result.getMarkdown()).contains("<table>"), result.getMarkdown());
+        }
     }
     @Test
     void docxPreservesHeadingsTableBoundariesAndFollowingParagraph() throws Exception {
