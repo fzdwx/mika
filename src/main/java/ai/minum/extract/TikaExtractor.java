@@ -202,6 +202,7 @@ public class TikaExtractor implements Extractor {
         context.set(TesseractOCRConfig.class, ocr);
         OfficeParserConfig office = new OfficeParserConfig();
         office.setConcatenatePhoneticRuns(false);
+        office.setUseSAXDocxExtractor(true);
         context.set(OfficeParserConfig.class, office);
         return context;
     }

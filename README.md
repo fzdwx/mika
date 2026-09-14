@@ -28,9 +28,9 @@ try (var stream = Files.newInputStream(Path.of("操作手册.docx"))) {
 
 | 输入 | 输出与结构 |
 | --- | --- |
-| DOC / DOCX | 经 Tika 结构提取后转换为 Markdown，保留解析出的标题、段落、链接、表格、嵌套内容和图片位置 |
+| DOC / DOCX | 经 Tika 结构提取后转换为 Markdown，保留解析出的标题、段落、链接、表格、嵌套内容和图片位置；DOCX 使用 SAX 解析以兼容新式图表 |
 | XLS / XLSX、PPT / PPTX 等 Tika 支持的格式 | 从结构化 XHTML 转换为 Markdown，避免只提取一串纯文本 |
-| PDF | 按坐标排序提取文字，保留物理页；图片上传链接和 OCR 文字附在所在页末尾 |
+| PDF | 按文档内容流保留阅读顺序；阿拉伯文、希伯来文等从右到左页面自动切换坐标排序；保留物理页，图片上传链接和 OCR 文字附在所在页末尾 |
 | Markdown | UTF-8 原样读取，仅去除文件开头的 BOM |
 | TXT | 保留换行并转义 Markdown 特殊字符，避免普通文本被误当成标题或强调 |
 | 图片 | 兼容图片块 `[Image](url)OCR文字[ImageEnd]`；可以只上传图片而不开启 OCR |
@@ -70,7 +70,8 @@ OCR 请求沿用 multipart `file` 协议，响应要求包含字符串 `data`，
 - `mvn package` 生成可直接供 `data-extract/lib` 使用的 shaded JAR；只内嵌并重定位新增的 Flexmark、Jsoup 运行时，Tika、POI、HTTP 和日志依赖仍由应用提供。
 - `data-extract` 应在存储层保留 Markdown 空行和图片块边界。
 - `hasImage()` 表示存在图片，不代表已识别所有图片。`hasTable()` 表示解析器识别到了表格；PDF 的 Form XObject 不再被误判为表格，PDF 表格结构仍需版面识别。
-- PDF 多栏阅读顺序、扫描页拼接、图文精确穿插、公式和表格识别不在这轮实现范围内。Word 合并单元格及复杂编号的结构恢复仍受 Tika 输出能力限制，当前不保证还原合并几何或生成原生嵌套列表。
+- PDF 内容流正确的多栏文档会保留阅读顺序；内容流本身错误时仍需版面识别。扫描页拼接、图文精确穿插、公式和 PDF 表格识别不在这轮实现范围内。Word 合并单元格及复杂编号的结构恢复仍受 Tika 输出能力限制，当前不保证还原合并几何或生成原生嵌套列表。
+- POI/Tika 不支持 Word 2.0；Mika 会返回明确错误并要求先转为 DOCX，避免以空内容伪装成功。DOCX 批注会转换为 Markdown 内容，嵌入附件不递归并入正文。
 - 长文本不再经过 `Tika.parseToString()` 默认长度上限，但当前仍在内存构建完整结果；超大文件的流式处理需要后续升级。
 
 ## 验证
@@ -80,4 +81,4 @@ mvn test
 mvn package -DskipTests
 ```
 
-回归测试使用程序生成的 DOCX / XLSX / PPTX / PDF / PNG 和内嵌文本，OCR 测试使用临时本地 HTTP 服务，不连接业务系统。覆盖中文编码、长文本结尾、表格实际渲染、嵌套表格和图片、PDF 物理页、图片限制、配置复用，以及后端失败。
+回归测试主要使用程序生成的 DOCX / XLSX / PPTX / PDF / PNG 和内嵌文本，并包含 Apache POI 的 ChartEx 兼容样本；OCR 测试使用临时本地 HTTP 服务，不连接业务系统。覆盖中文编码、长文本结尾、表格实际渲染、嵌套表格和图片、PDF 物理页和阅读顺序、图片限制、配置复用、Word 2.0 拒绝，以及后端失败。

@@ -35,6 +35,36 @@ class PDFExtractTest {
             "Numbers of source Raster bands and source color space components do not match";
 
     @Test
+    void keepsDocumentReadingOrderInsteadOfInterleavingVisualColumns() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                writeText(content, "left first", 72, 720);
+                writeText(content, "left second", 72, 700);
+                writeText(content, "right first", 300, 720);
+                writeText(content, "right second", 300, 700);
+            }
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        String markdown = Mika.extract("pdf", new ByteArrayInputStream(pdf), ExtractConfig.defaultConfig())
+                .getMarkdown();
+
+        assertTrue(markdown.indexOf("left second") < markdown.indexOf("right first"), markdown);
+    }
+
+    @Test
+    void identifiesPagesThatNeedRightToLeftPositionSorting() {
+        assertTrue(PDFExtract.isPredominantlyRightToLeft(
+                "تقرير اقتصادي اجتماعي عن الأراضي الفلسطينية المحتلة"));
+        assertFalse(PDFExtract.isPredominantlyRightToLeft(
+                "English paragraph with only مثال عربي embedded"));
+    }
+
+    @Test
     void keepsJpegScansCompressedForOcrAndUploadLimits() throws Exception {
         BufferedImage bufferedImage = new BufferedImage(40, 40, BufferedImage.TYPE_INT_RGB);
         ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
@@ -177,5 +207,13 @@ class PDFExtractTest {
             document.save(output);
             return output.toByteArray();
         }
+    }
+
+    private static void writeText(PDPageContentStream content, String text, float x, float y) throws Exception {
+        content.beginText();
+        content.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+        content.newLineAtOffset(x, y);
+        content.showText(text);
+        content.endText();
     }
 }

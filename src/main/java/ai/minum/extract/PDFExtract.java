@@ -36,11 +36,21 @@ public class PDFExtract implements Extractor {
         ExtractResult result = ExtractResult.of();
         try (PDDocument doc = Loader.loadPDF(stream.readAllBytes())) {
             PDFTextStripper reader = new PDFTextStripper();
-            reader.setSortByPosition(true);
+            // Keep the content-stream order. Tagged/accessible PDFs place text in their intended
+            // reading order; sorting by coordinates interleaves rows across visual columns.
+            reader.setSortByPosition(false);
             for (int i = 0; i < doc.getNumberOfPages(); i++) {
                 reader.setStartPage(i + 1);
                 reader.setEndPage(i + 1);
-                StringBuilder content = new StringBuilder(Markdown.fromText(reader.getText(doc)));
+                String text = reader.getText(doc);
+                if (isPredominantlyRightToLeft(text)) {
+                    // Older Arabic/Hebrew PDFs often store glyphs in visual order. PDFBox's
+                    // position sorter also applies its bidi normalization for those pages.
+                    reader.setSortByPosition(true);
+                    text = reader.getText(doc);
+                    reader.setSortByPosition(false);
+                }
+                StringBuilder content = new StringBuilder(Markdown.fromText(text));
                 PageImages images = new PageImages(doc.getPage(i));
                 images.processPage(doc.getPage(i));
                 result.setHasImage(result.hasImage() || !images.images.isEmpty());
@@ -79,6 +89,25 @@ public class PDFExtract implements Extractor {
             }
         }
         return result;
+    }
+
+    static boolean isPredominantlyRightToLeft(String text) {
+        int letters = 0;
+        int rightToLeftLetters = 0;
+        for (int offset = 0; offset < text.length();) {
+            int codePoint = text.codePointAt(offset);
+            offset += Character.charCount(codePoint);
+            if (!Character.isLetter(codePoint)) {
+                continue;
+            }
+            letters++;
+            byte direction = Character.getDirectionality(codePoint);
+            if (direction == Character.DIRECTIONALITY_RIGHT_TO_LEFT
+                    || direction == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC) {
+                rightToLeftLetters++;
+            }
+        }
+        return rightToLeftLetters >= 8 && rightToLeftLetters * 2 >= letters;
     }
 
     /** Follows painted Form XObjects and inline images, including nested forms. */

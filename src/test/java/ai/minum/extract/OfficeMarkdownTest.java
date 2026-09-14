@@ -24,6 +24,30 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class OfficeMarkdownTest {
+
+    /** Apache POI test-data/document/chartex.docx (Apache-2.0). */
+    @Test
+    void extractsModernChartExWithTheSaxDocxParser() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/poi-chartex.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("This is a stock chart"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("this is a box and whisker chart"), result.getMarkdown());
+        }
+    }
+
+    @Test
+    void reportsLegacyWord2InsteadOfReturningEmptySuccess() {
+        byte[] word2Header = {(byte) 0xdb, (byte) 0xa5, 0x2d, 0, 0, 0, 0, 0};
+
+        ExtractResult result = new DocExtract().extract(
+                ExtractConfig.defaultConfig(), new ByteArrayInputStream(word2Header));
+
+        assertTrue(result.isError());
+        assertTrue(result.getErrorMessage().contains("Word 2.0"), result.getErrorMessage());
+    }
     @Test
     void docxPreservesHeadingsTableBoundariesAndFollowingParagraph() throws Exception {
         try (XWPFDocument document = new XWPFDocument()) {
