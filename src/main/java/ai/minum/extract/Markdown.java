@@ -3,15 +3,23 @@ package ai.minum.extract;
 import com.vladsch.flexmark.html2md.converter.FlexmarkHtmlConverter;
 import com.vladsch.flexmark.html2md.converter.HtmlNodeRendererHandler;
 import com.vladsch.flexmark.util.data.MutableDataSet;
+import com.vladsch.flexmark.util.format.TableFormatOptions;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.safety.Safelist;
 
 import java.util.Set;
+import java.util.StringJoiner;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Shared rendering rules for extracted content. Existing Markdown bypasses this renderer. */
 final class Markdown {
+    private static final Pattern OFFICE_LINK_TARGET = Pattern.compile(
+            "(?i)\\s*(?:[\\\"']|&quot;|&#0*34;|&#x0*22;)\\s*(?:\\\\t|\\t)\\s*"
+                    + "(?:[\\\"']|&quot;|&#0*34;|&#x0*22;).*$");
+    private static final Pattern TABLE_SEPARATOR_CELL = Pattern.compile(":?-{3,}:?");
     private static final Safelist COMPLEX_TABLE_HTML = new Safelist()
             .addTags("table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "colgroup", "col",
                     "p", "div", "span", "br", "strong", "b", "em", "i", "u", "s", "del", "code", "pre",
@@ -32,7 +40,9 @@ final class Markdown {
         document.select("script, style, iframe").remove();
         document.outputSettings().prettyPrint(false);
         for (Element link : document.select("a[href]")) {
-            if (!hasAllowedScheme(link.attr("href"), Set.of("http", "https", "mailto"))) {
+            String href = cleanOfficeLinkTarget(link.attr("href"));
+            link.attr("href", href);
+            if (!hasAllowedScheme(href, Set.of("http", "https", "mailto"))) {
                 link.removeAttr("href");
             }
         }
@@ -47,6 +57,13 @@ final class Markdown {
         // as ++text++, which leaks presentation markup into chunks and is not understood by common
         // Markdown renderers. Keep the visible text and discard only the unsupported decoration.
         document.select("u, ins").unwrap();
+        // Word bookmarks and empty styled form runs have no visible content. Flexmark drops them
+        // from ordinary Markdown, but they would otherwise survive inside preserved HTML tables.
+        for (Element inline : document.select("a, b, strong, i, em, span, u, ins, s, del, code, sub, sup")) {
+            if (inline.text().isBlank() && inline.select("img, br, table").isEmpty()) {
+                inline.remove();
+            }
+        }
         // Office parsers commonly emit empty paragraphs and trailing breaks as layout artifacts.
         // Paragraph boundaries already become blank lines in Markdown, so retaining these adds noise.
         for (Element paragraph : document.select("p")) {
@@ -79,9 +96,10 @@ final class Markdown {
                 .set(FlexmarkHtmlConverter.TYPOGRAPHIC_SMARTS, false)
                 .set(FlexmarkHtmlConverter.BR_AS_PARA_BREAKS, false)
                 .set(FlexmarkHtmlConverter.IGNORE_TABLE_HEADING_AFTER_ROWS, false)
+                .set(TableFormatOptions.FORMAT_TABLE_ADJUST_COLUMN_WIDTH, false)
                 .set(FlexmarkHtmlConverter.UNORDERED_LIST_DELIMITER, '-');
         FlexmarkHtmlConverter simpleTables = FlexmarkHtmlConverter.builder(options).build();
-        return FlexmarkHtmlConverter.builder(options)
+        String markdown = FlexmarkHtmlConverter.builder(options)
                 .htmlNodeRendererFactory(ignored -> () -> Set.of(
                         new HtmlNodeRendererHandler<>("table", Element.class, (table, context, out) -> {
                             // GFM cannot represent merged or nested cells. Keep just these tables as HTML.
@@ -90,10 +108,62 @@ final class Markdown {
                                         document.outputSettings());
                                 out.blankLine().append(safeTable).blankLine();
                             } else {
-                                out.blankLine().append(simpleTables.convert(table.outerHtml())).blankLine();
+                                out.blankLine().append(compactTableSeparators(
+                                        simpleTables.convert(table.outerHtml()))).blankLine();
                             }
                         })))
                 .build().convert(document.body().html()).strip();
+        return markdown;
+    }
+
+    private static String cleanOfficeLinkTarget(String href) {
+        Matcher target = OFFICE_LINK_TARGET.matcher(href);
+        return (target.find() ? href.substring(0, target.start()) : href).strip();
+    }
+
+    private static String compactTableSeparators(String markdown) {
+        String[] lines = markdown.split("\\n", -1);
+        StringBuilder compact = new StringBuilder(markdown.length());
+        int nonBlankLine = 0;
+        for (int index = 0; index < lines.length; index++) {
+            if (index > 0) {
+                compact.append('\n');
+            }
+            String line = lines[index];
+            compact.append(nonBlankLine == 1 ? compactTableSeparator(line) : line);
+            if (!line.isBlank()) {
+                nonBlankLine++;
+            }
+        }
+        return compact.toString();
+    }
+
+    private static String compactTableSeparator(String line) {
+        int contentStart = 0;
+        while (contentStart < line.length() && Character.isWhitespace(line.charAt(contentStart))) {
+            contentStart++;
+        }
+        String indent = line.substring(0, contentStart);
+        String table = line.substring(contentStart).strip();
+        if (!table.contains("|")) {
+            return line;
+        }
+        boolean leadingPipe = table.startsWith("|");
+        boolean trailingPipe = table.endsWith("|");
+        String cells = table.substring(leadingPipe ? 1 : 0, table.length() - (trailingPipe ? 1 : 0));
+        String[] parts = cells.split("\\|", -1);
+        if (parts.length == 0) {
+            return line;
+        }
+        StringJoiner separator = new StringJoiner(" | ");
+        for (String part : parts) {
+            String cell = part.strip();
+            if (!TABLE_SEPARATOR_CELL.matcher(cell).matches()) {
+                return line;
+            }
+            separator.add((cell.startsWith(":") ? ":" : "") + "---" + (cell.endsWith(":") ? ":" : ""));
+        }
+        return indent + (leadingPipe ? "| " : "") + separator + (trailingPipe ? " |" : "");
     }
 
     private static boolean isComplexTable(Element table) {

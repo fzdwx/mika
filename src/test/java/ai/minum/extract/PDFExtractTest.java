@@ -18,6 +18,8 @@ import org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.pdmodel.graphics.image.PDInlineImage;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
+import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
+import org.apache.pdfbox.pdmodel.interactive.form.PDTextField;
 import org.junit.jupiter.api.Test;
 
 import javax.imageio.ImageIO;
@@ -26,6 +28,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -143,6 +146,38 @@ class PDFExtractTest {
         assertTrue(result.getMarkdown().contains(
                 "Available 24/7, you can book an appointment online."), result.getMarkdown());
         assertFalse(result.getMarkdown().contains("Availal;!e"), result.getMarkdown());
+    }
+
+    @Test
+    void includesInteractiveFormValuesAndRemovesControlCharacters() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            PDAcroForm form = new PDAcroForm(document);
+            document.getDocumentCatalog().setAcroForm(form);
+            PDTextField field = new PDTextField(form);
+            field.setPartialName("Applicant");
+            field.getCOSObject().setString(COSName.V, "Alice\u0001 Zhang\u2028Shanghai");
+            field.getWidgets().getFirst().setPage(page);
+            page.getAnnotations().add(field.getWidgets().getFirst());
+            form.setFields(List.of(field));
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        ExtractResult result = Mika.extract("pdf", new ByteArrayInputStream(pdf), ExtractConfig.defaultConfig());
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(result.getMarkdown().contains("### Form fields"), result.getMarkdown());
+        assertTrue(result.getMarkdown().contains("- Applicant: Alice Zhang\n  Shanghai"), result.getMarkdown());
+        assertFalse(result.getMarkdown().contains("\u0001"), result.getMarkdown());
+
+        ExtractResult limited = Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig().maxExtractedContentSize(16));
+        assertTrue(limited.isError());
+        assertTrue(limited.getErrorMessage().contains("Extracted content size limit exceeded"),
+                limited.getErrorMessage());
     }
 
     @Test

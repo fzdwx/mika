@@ -13,6 +13,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public interface Extractor {
@@ -74,9 +75,31 @@ public interface Extractor {
         try {
             ExtractResult result = doExtract(extractionConfig, limited);
             limited.verifyExhausted();
+            verifyExtractedContentSize(result, extractionConfig.maxExtractedContentSize());
             return result;
         } catch (Exception e) {
             return ExtractResult.error(e);
+        }
+    }
+
+    private static void verifyExtractedContentSize(ExtractResult result, int limit) throws IOException {
+        if (result == null || result.isError() || result.getPages() == null) {
+            return;
+        }
+        long bytes = 0;
+        boolean hasContent = false;
+        for (ExtractPage page : result.getPages()) {
+            if (page == null || page.getContent() == null || page.getContent().isBlank()) {
+                continue;
+            }
+            if (hasContent) {
+                bytes += 2; // getMarkdown() joins non-blank physical pages with two line feeds.
+            }
+            bytes += page.getContent().getBytes(StandardCharsets.UTF_8).length;
+            hasContent = true;
+            if (bytes > limit) {
+                throw new IOException("Extracted content size limit exceeded: " + limit + " bytes");
+            }
         }
     }
 

@@ -13,6 +13,12 @@ import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructur
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImage;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotation;
+import org.apache.pdfbox.pdmodel.interactive.form.PDButton;
+import org.apache.pdfbox.pdmodel.interactive.form.PDChoice;
+import org.apache.pdfbox.pdmodel.interactive.form.PDField;
+import org.apache.pdfbox.pdmodel.interactive.form.PDNonTerminalField;
+import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,9 +32,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.StringJoiner;
 
 public class PDFExtract implements Extractor {
     private static final Logger logger = LoggerFactory.getLogger(PDFExtract.class);
@@ -43,6 +51,7 @@ public class PDFExtract implements Extractor {
         ExtractResult result = ExtractResult.of();
         try (PDDocument doc = Loader.loadPDF(stream.readAllBytes())) {
             Map<COSDictionary, Map<Integer, String>> structureActualText = structureActualText(doc);
+            Map<Integer, List<FormValue>> formValues = formValues(doc);
             for (int i = 0; i < doc.getNumberOfPages(); i++) {
                 Map<Integer, String> pageActualText = structureActualText.getOrDefault(
                         doc.getPage(i).getCOSObject(), Map.of());
@@ -60,6 +69,13 @@ public class PDFExtract implements Extractor {
                     }
                 }
                 StringBuilder content = new StringBuilder(Markdown.fromText(text));
+                String pageFormValues = formValuesMarkdown(formValues.getOrDefault(i, List.of()));
+                if (!pageFormValues.isBlank()) {
+                    if (!content.isEmpty()) {
+                        content.append("\n\n");
+                    }
+                    content.append(pageFormValues);
+                }
                 PageImages images = new PageImages(doc.getPage(i));
                 images.processPage(doc.getPage(i));
                 result.setHasImage(result.hasImage() || !images.images.isEmpty());
@@ -98,6 +114,153 @@ public class PDFExtract implements Extractor {
             }
         }
         return result;
+    }
+
+    private static Map<Integer, List<FormValue>> formValues(PDDocument document) {
+        var acroForm = document.getDocumentCatalog().getAcroForm();
+        if (acroForm == null) {
+            return Map.of();
+        }
+        Map<COSDictionary, Integer> pageNumbers = new IdentityHashMap<>();
+        Map<COSDictionary, Integer> annotationPages = new IdentityHashMap<>();
+        try {
+            for (int pageNumber = 0; pageNumber < document.getNumberOfPages(); pageNumber++) {
+                PDPage page = document.getPage(pageNumber);
+                pageNumbers.put(page.getCOSObject(), pageNumber);
+                for (PDAnnotation annotation : page.getAnnotations()) {
+                    annotationPages.put(annotation.getCOSObject(), pageNumber);
+                }
+            }
+        } catch (IOException | RuntimeException malformedAnnotations) {
+            logger.warn("Cannot map all PDF form widgets to physical pages", malformedAnnotations);
+        }
+
+        Map<Integer, List<FormValue>> values = new LinkedHashMap<>();
+        try {
+            for (PDField field : acroForm.getFieldTree()) {
+                if (field instanceof PDNonTerminalField || field instanceof PDSignatureField) {
+                    continue;
+                }
+                String value = formValue(field);
+                if (value.isBlank()) {
+                    continue;
+                }
+                String name = firstNonBlank(field.getAlternateFieldName(), field.getPartialName(),
+                        field.getFullyQualifiedName(), "Field");
+                Set<Integer> fieldPages = new LinkedHashSet<>();
+                for (var widget : field.getWidgets()) {
+                    if (widget.isHidden() || widget.isInvisible() || widget.isNoView()) {
+                        continue;
+                    }
+                    Integer widgetPage = widget.getPage() == null
+                            ? annotationPages.get(widget.getCOSObject())
+                            : pageNumbers.get(widget.getPage().getCOSObject());
+                    if (widgetPage != null) {
+                        fieldPages.add(widgetPage);
+                    }
+                }
+                if (fieldPages.isEmpty()) {
+                    continue;
+                }
+                FormValue formValue = new FormValue(normalizeFormText(name).replace('\n', ' '), value);
+                for (Integer pageNumber : fieldPages) {
+                    List<FormValue> pageValues = values.computeIfAbsent(pageNumber, ignored -> new ArrayList<>());
+                    if (!pageValues.contains(formValue)) {
+                        pageValues.add(formValue);
+                    }
+                }
+            }
+        } catch (RuntimeException malformedForm) {
+            // A malformed optional form tree must not discard the page text that was already readable.
+            logger.warn("Cannot extract all PDF form values", malformedForm);
+        }
+        return values;
+    }
+
+    private static String formValue(PDField field) {
+        String value = field.getValueAsString();
+        if (value == null) {
+            return "";
+        }
+        if (field instanceof PDButton && (value.equalsIgnoreCase("Off") || value.equalsIgnoreCase("/Off"))) {
+            return "";
+        }
+        if (field instanceof PDChoice choice) {
+            List<String> displayValues = choice.getOptionsDisplayValues();
+            List<String> exportValues = choice.getOptionsExportValues();
+            StringJoiner selected = new StringJoiner(", ");
+            for (Integer index : choice.getSelectedOptionsIndex()) {
+                if (index != null && index >= 0 && index < displayValues.size()) {
+                    selected.add(displayValues.get(index));
+                }
+            }
+            if (selected.length() == 0) {
+                for (String selectedValue : choice.getValue()) {
+                    int index = exportValues.indexOf(selectedValue);
+                    selected.add(index >= 0 && index < displayValues.size()
+                            ? displayValues.get(index) : selectedValue);
+                }
+            }
+            if (selected.length() > 0) {
+                value = selected.toString();
+            }
+        }
+        return normalizeFormText(value);
+    }
+
+    private static String normalizeFormText(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        StringBuilder clean = new StringBuilder(value.length());
+        boolean pendingSpace = false;
+        for (int offset = 0; offset < value.length();) {
+            int codePoint = value.codePointAt(offset);
+            offset += Character.charCount(codePoint);
+            if (codePoint == '\r' || codePoint == '\n' || codePoint == 0x2028 || codePoint == 0x2029) {
+                while (!clean.isEmpty() && clean.charAt(clean.length() - 1) == ' ') {
+                    clean.setLength(clean.length() - 1);
+                }
+                if (!clean.isEmpty() && clean.charAt(clean.length() - 1) != '\n') {
+                    clean.append('\n');
+                }
+                pendingSpace = false;
+            } else if (Character.isISOControl(codePoint) || Character.isWhitespace(codePoint)
+                    || Character.getType(codePoint) == Character.SPACE_SEPARATOR) {
+                pendingSpace = !clean.isEmpty() && clean.charAt(clean.length() - 1) != '\n';
+            } else {
+                if (pendingSpace) {
+                    clean.append(' ');
+                }
+                clean.appendCodePoint(codePoint);
+                pendingSpace = false;
+            }
+        }
+        return clean.toString().strip();
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private static String formValuesMarkdown(List<FormValue> values) {
+        if (values.isEmpty()) {
+            return "";
+        }
+        StringJoiner markdown = new StringJoiner("\n", "### Form fields\n\n", "");
+        for (FormValue value : values) {
+            String body = Markdown.fromText(value.value()).replace("\n", "\n  ");
+            markdown.add("- " + Markdown.fromText(value.name()) + ": " + body);
+        }
+        return markdown.toString();
+    }
+
+    private record FormValue(String name, String value) {
     }
 
     private static String extractPageText(PDDocument document, int pageIndex, boolean sortByPosition,

@@ -393,6 +393,39 @@ class OfficeMarkdownTest {
     }
 
     @Test
+    void emptyOfficeFormattingDoesNotPolluteComplexTables() {
+        String markdown = Markdown.fromHtml("""
+                <table><tr><td colspan="2"><a name="bookmark"></a><i> </i>可见内容</td></tr></table>
+                """);
+
+        assertTrue(markdown.contains("<table>"), markdown);
+        assertTrue(markdown.contains("可见内容"), markdown);
+        assertFalse(markdown.contains("<a"), markdown);
+        assertFalse(markdown.contains("<i"), markdown);
+    }
+
+    @Test
+    void simpleTablesDoNotPadRowsAndSeparatorsToLongCellWidths() {
+        String longCell = "很长的单元格".repeat(100);
+        String markdown = Markdown.fromHtml("<table><tr><td>短</td><td>" + longCell + "</td></tr></table>");
+
+        assertTrue(markdown.contains("| --- | --- |"), markdown);
+        assertTrue(markdown.contains("| 短 | " + longCell + " |"), markdown);
+        assertFalse(markdown.contains("-".repeat(100)), markdown);
+        assertTrue(render(markdown).contains("<table>"), markdown);
+    }
+
+    @Test
+    void legacyWordLinkTargetSwitchIsRemovedFromDestination() {
+        String markdown = Markdown.fromHtml("""
+                <p><a href='https://example.com/path&amp;quot; \\t &amp;quot;_blank'>旧 Word 链接</a></p>
+                """);
+
+        assertEquals("[旧 Word 链接](https://example.com/path)", markdown);
+        assertFalse(markdown.contains("\\t"), markdown);
+    }
+
+    @Test
     void officeLayoutBreaksDoNotPolluteMarkdown() {
         String markdown = Markdown.fromHtml("<p>第一段<br></p><p><br></p><p>第二段<br>仍是第二段</p>");
 
