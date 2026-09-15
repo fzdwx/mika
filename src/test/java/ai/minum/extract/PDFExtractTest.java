@@ -52,6 +52,33 @@ class PDFExtractTest {
             "Numbers of source Raster bands and source color space components do not match";
 
     @Test
+    void keepsPdfImagePositionWithoutOcrOrUpload() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            PDImageXObject image = LosslessFactory.createFromImage(document,
+                    new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB));
+            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                writeText(content, "above", 72, 700);
+                content.drawImage(image, 72, 500, 40, 40);
+                writeText(content, "below", 72, 300);
+            }
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        ExtractResult result = Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig());
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        int above = result.getMarkdown().indexOf("above");
+        int image = result.getMarkdown().indexOf("[Image][ImageEnd]");
+        int below = result.getMarkdown().indexOf("below");
+        assertTrue(above < image && image < below, result.getMarkdown());
+    }
+
+    @Test
     void keepsDocumentReadingOrderInsteadOfInterleavingVisualColumns() throws Exception {
         byte[] pdf;
         try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {

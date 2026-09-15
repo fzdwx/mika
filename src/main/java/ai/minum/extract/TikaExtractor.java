@@ -127,9 +127,14 @@ public class TikaExtractor implements Extractor {
         Document document = parseTikaXhtml(xhtml.toString(StandardCharsets.UTF_8));
         removeDuplicateLegacyChartViews(document);
         cleanDocument(document, metadata, repeatableSource, result);
+        String contentType = metadata.get(HttpHeaders.CONTENT_TYPE);
+        // Preserve blank-line paragraph boundaries before serializing Jsoup's HTML DOM; HTML
+        // serialization otherwise collapses Tika's linked-text-box text into one retrieval line.
+        if (contentType == null || !contentType.startsWith("text/plain")) {
+            Markdown.splitEmbeddedParagraphs(document);
+        }
         Map<String, String> equationMarkers = equationMarkers(document);
         result.setHasTable(!document.select("table").isEmpty());
-        result.setHasImage(!document.select("img").isEmpty());
 
         Set<String> referencedImages = new LinkedHashSet<>();
         Set<String> anonymousImages = new LinkedHashSet<>();
@@ -161,6 +166,10 @@ public class TikaExtractor implements Extractor {
                 content = appendImageText(content, alternativeText);
             } else if ((content == null || content.isBlank()) && !alternativeText.isBlank()) {
                 content = Markdown.image("", alternativeText);
+            } else if ((content == null || content.isBlank()) && name != null) {
+                // The caller may intentionally disable OCR/upload, or an image may exceed a
+                // processing limit. Its position is still part of the document and must survive.
+                content = Markdown.image("", "");
             }
             if (content == null || content.isBlank()) {
                 image.remove();
@@ -177,10 +186,12 @@ public class TikaExtractor implements Extractor {
                 imageMarkers.put(marker, content);
             }
         }
+        // Tika also emits anonymous <img/> elements for some VML text-box shapes. Report an image
+        // only when a real reference, alternative text, upload, or OCR result survived as a marker.
+        result.setHasImage(!imageMarkers.isEmpty());
         // Tika adds the package part name as a synthetic heading around altChunk content. It is an
         // implementation detail rather than Word body text and would otherwise pollute retrieval.
         document.select("div.package-entry > h1:first-child").remove();
-        String contentType = metadata.get(HttpHeaders.CONTENT_TYPE);
         String markdown = contentType != null && contentType.startsWith("text/plain")
                 ? Markdown.fromText(document.body().wholeText())
                 : Markdown.fromHtml(document.body().html());

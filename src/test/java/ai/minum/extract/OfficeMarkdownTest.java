@@ -258,6 +258,11 @@ class OfficeMarkdownTest {
             String markdown = result.getMarkdown();
             assertTrue(markdown.contains("A=\\pi r^{2}"), markdown);
             assertFalse(markdown.contains("A=πr2"), markdown);
+            assertTrue(markdown.contains("This is a header."), markdown);
+            assertTrue(markdown.contains("\na\n") && markdown.contains("\nb\n")
+                    && markdown.contains("\nc"), markdown);
+            assertTrue(markdown.contains("[Image][ImageEnd]"), markdown);
+            assertTrue(markdown.contains("| Category | Series 1 |"), markdown);
         }
     }
 
@@ -498,6 +503,65 @@ class OfficeMarkdownTest {
         }
     }
 
+    /** LibreOffice sw/qa/extras/ww8export/data/image-comment-at-char.doc (MPL-2.0). */
+    @Test
+    void legacyDocCommentContextDoesNotExposeBackspaceControlCharacter() throws Exception {
+        try (var input = getClass().getResourceAsStream(
+                "/documents/libreoffice-image-comment-at-char.doc")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("doc", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("reference context: “aaa”"), result.getMarkdown());
+            assertFalse(result.getMarkdown().contains("\u0008"), result.getMarkdown());
+        }
+    }
+
+    /** Apache POI test-data/document/equation.doc (Apache-2.0). */
+    @Test
+    void legacyDocRecoversEmbeddedOpenDocumentFormulaSource() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/poi-embedded-formula.doc")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("doc", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("### Embedded formulas"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("a^n + b^n = c^n; n>2"), result.getMarkdown());
+        }
+    }
+
+    /** LibreOffice sw/qa/extras/ooxmlexport/data/linked-textboxes.docx (MPL-2.0). */
+    @Test
+    void linkedTextBoxKeepsItsSourceParagraphBoundaries() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/libreoffice-linked-textboxes.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            String markdown = result.getMarkdown();
+            assertTrue(markdown.contains("**Capt. Gerry Slevin**"), markdown);
+            assertTrue(markdown.contains("[here](http://www.ndu.edu/icollege/network/ntwk_list1.html)"),
+                    markdown);
+            assertTrue(markdown.lines().noneMatch(line -> line.length() > 1_000), markdown);
+        }
+    }
+
+    /** Apache Tika testWORD_emptyParaInTextbox.docx (Apache-2.0). */
+    @Test
+    void anonymousVmlTextBoxShapeIsNotReportedAsAnImage() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/tika-empty-textbox.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.hasTable());
+            assertFalse(result.hasImage());
+            assertFalse(result.getMarkdown().contains("[Image]"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("Prehľad vybraných kvantitatívnych údajov"),
+                    result.getMarkdown());
+        }
+    }
+
     /** Apache POI test-data/document/TableCellMerge.doc (Apache-2.0). */
     @Test
     void legacyDocRestoresVerticalMergedTableGeometry() throws Exception {
@@ -655,7 +719,7 @@ class OfficeMarkdownTest {
     }
 
     @Test
-    void docxLayoutPassDoesNotEnableImageExtraction() throws Exception {
+    void docxKeepsImagePositionWithoutEnablingImageExtraction() throws Exception {
         try (XWPFDocument document = new XWPFDocument()) {
             XWPFTable table = document.createTable(1, 2);
             table.getRow(0).getCell(0).setText("图片旁标题");
@@ -669,7 +733,7 @@ class OfficeMarkdownTest {
 
             assertFalse(result.isError(), result.getErrorMessage());
             assertTrue(result.getMarkdown().contains("colspan=\"2\""), result.getMarkdown());
-            assertFalse(result.getMarkdown().contains("[Image]"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("[Image][ImageEnd]"), result.getMarkdown());
         }
     }
 
@@ -757,7 +821,7 @@ class OfficeMarkdownTest {
 
             assertFalse(result.isError(), result.getErrorMessage());
             assertEquals(0, uploads.get());
-            assertFalse(result.getMarkdown().contains("[Image]"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("[Image][ImageEnd]"), result.getMarkdown());
             assertFalse(result.getMarkdown().contains("limited.png"), result.getMarkdown());
             assertTrue(result.getWarnings().stream().anyMatch(warning -> warning.contains("count limit")));
         }

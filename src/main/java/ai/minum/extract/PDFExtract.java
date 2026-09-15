@@ -134,8 +134,14 @@ public class PDFExtract implements Extractor {
     private List<PositionedImage> processPageImages(ExtractConfig config, ExtractResult result,
                                                      List<ImagePlacement> placements, int pageIndex)
             throws Exception {
-        if ((!config.ocr() && !config.uploadImage()) || placements.isEmpty()) {
+        if (placements.isEmpty()) {
             return List.of();
+        }
+        if (!config.ocr() && !config.uploadImage()) {
+            return placements.stream()
+                    .map(placement -> new PositionedImage(
+                            placement.yFromTop(), Markdown.image("", "")))
+                    .toList();
         }
         Map<COSBase, ProcessedImage> processed = new IdentityHashMap<>();
         Set<COSBase> skipped = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -147,35 +153,37 @@ public class PDFExtract implements Extractor {
                 if (!config.canHandleImage()) {
                     result.addWarning("Image count limit reached; some images were skipped");
                     skipped.add(identity);
-                    continue;
-                }
-                ImageResult imageResult;
-                try {
-                    if (placement.image() instanceof PDImageXObject xObject) {
-                        imageResult = toImageResult(xObject);
-                    } else {
-                        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                        if (!ImageIO.write(placement.image().getImage(), "png", bytes)) {
-                            throw new IOException("No PNG writer is available");
+                } else {
+                    ImageResult imageResult;
+                    try {
+                        if (placement.image() instanceof PDImageXObject xObject) {
+                            imageResult = toImageResult(xObject);
+                        } else {
+                            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                            if (!ImageIO.write(placement.image().getImage(), "png", bytes)) {
+                                throw new IOException("No PNG writer is available");
+                            }
+                            imageResult = ImageResult.of(bytes.toByteArray(), ImageResult.Format.PNG);
                         }
-                        imageResult = ImageResult.of(bytes.toByteArray(), ImageResult.Format.PNG);
+                    } catch (IOException | RuntimeException error) {
+                        logger.warn("Skip undecodable PDF image: page={}", pageIndex + 1, error);
+                        result.addWarning("Cannot decode image on page " + (pageIndex + 1));
+                        skipped.add(identity);
+                        imageResult = null;
                     }
-                } catch (IOException | RuntimeException error) {
-                    logger.warn("Skip undecodable PDF image: page={}", pageIndex + 1, error);
-                    result.addWarning("Cannot decode image on page " + (pageIndex + 1));
-                    skipped.add(identity);
-                    continue;
+                    if (imageResult != null) {
+                        // Backend failures remain errors, so callers can retry OCR/upload.
+                        ExtractedImage content = extractImageContent(config, imageResult, result, true);
+                        processed.put(identity, new ProcessedImage(
+                                content.firstPlacement(), content.repeatedPlacement()));
+                    }
                 }
-                // Backend failures remain errors, so callers can retry OCR/upload.
-                ExtractedImage content = extractImageContent(config, imageResult, result, true);
-                processed.put(identity, new ProcessedImage(
-                        content.firstPlacement(), content.repeatedPlacement()));
             }
             ProcessedImage image = processed.get(identity);
-            if (image != null && !image.firstPlacement().isBlank()) {
-                positioned.add(new PositionedImage(placement.yFromTop(), emitted.add(identity)
-                        ? image.firstPlacement() : image.repeatedPlacement()));
-            }
+            String markdown = image == null ? "" : emitted.add(identity)
+                    ? image.firstPlacement() : image.repeatedPlacement();
+            positioned.add(new PositionedImage(placement.yFromTop(), markdown.isBlank()
+                    ? Markdown.image("", "") : markdown));
         }
         return positioned;
     }

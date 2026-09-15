@@ -133,6 +133,11 @@ public class DocExtract extends TikaExtractor {
             } catch (RuntimeException malformedComments) {
                 logger.debug("Cannot restore old Word comment structure", malformedComments);
             }
+            try {
+                DocEmbeddedFormulas.restore(document, word, result);
+            } catch (Exception malformedFormula) {
+                logger.debug("Cannot restore an embedded old Word formula", malformedFormula);
+            }
             if (document.select("img").isEmpty()) {
                 return;
             }

@@ -7,8 +7,11 @@ import com.vladsch.flexmark.util.format.TableFormatOptions;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+import org.jsoup.nodes.Node;
+import org.jsoup.nodes.TextNode;
 import org.jsoup.safety.Safelist;
 
+import java.util.List;
 import java.util.Set;
 import java.util.StringJoiner;
 import java.util.regex.Matcher;
@@ -20,6 +23,7 @@ final class Markdown {
             "(?i)\\s*(?:[\\\"']|&quot;|&#0*34;|&#x0*22;)\\s*(?:\\\\t|\\t)\\s*"
                     + "(?:[\\\"']|&quot;|&#0*34;|&#x0*22;).*$");
     private static final Pattern TABLE_SEPARATOR_CELL = Pattern.compile(":?-{3,}:?");
+    private static final Pattern EMBEDDED_PARAGRAPH_BREAK = Pattern.compile("(?:\\r?\\n[\\t ]*){2,}");
     private static final Safelist COMPLEX_TABLE_HTML = new Safelist()
             .addTags("table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "colgroup", "col",
                     "p", "div", "span", "br", "strong", "b", "em", "i", "u", "s", "del", "code", "pre",
@@ -57,6 +61,7 @@ final class Markdown {
         // as ++text++, which leaks presentation markup into chunks and is not understood by common
         // Markdown renderers. Keep the visible text and discard only the unsupported decoration.
         document.select("u, ins").unwrap();
+        splitEmbeddedParagraphs(document);
         // Word bookmarks and empty styled form runs have no visible content. Flexmark drops them
         // from ordinary Markdown, but they would otherwise survive inside preserved HTML tables.
         for (Element inline : document.select("a, b, strong, i, em, span, u, ins, s, del, code, sub, sup")) {
@@ -114,6 +119,49 @@ final class Markdown {
                         })))
                 .build().convert(document.body().html()).strip();
         return normalizeInvisibleCharacters(markdown).strip();
+    }
+
+    /** Tika may keep linked text-box paragraphs as blank-line-separated text inside one XHTML p. */
+    static void splitEmbeddedParagraphs(Document document) {
+        for (Element paragraph : document.select("p").stream().toList()) {
+            boolean hasBoundary = paragraph.childNodes().stream()
+                    .filter(TextNode.class::isInstance).map(TextNode.class::cast)
+                    .anyMatch(text -> EMBEDDED_PARAGRAPH_BREAK.matcher(text.getWholeText()).find());
+            if (!hasBoundary) {
+                continue;
+            }
+            List<Element> fragments = new java.util.ArrayList<>();
+            Element current = copyParagraph(paragraph);
+            fragments.add(current);
+            for (Node child : paragraph.childNodes()) {
+                if (!(child instanceof TextNode text)) {
+                    current.appendChild(child.clone());
+                    continue;
+                }
+                String[] parts = EMBEDDED_PARAGRAPH_BREAK.split(text.getWholeText(), -1);
+                current.appendText(parts[0]);
+                for (int index = 1; index < parts.length; index++) {
+                    current = copyParagraph(paragraph);
+                    fragments.add(current);
+                    current.appendText(parts[index]);
+                }
+            }
+            List<Element> visible = fragments.stream()
+                    .filter(fragment -> !fragment.text().isBlank()
+                            || !fragment.select("img, table, br").isEmpty())
+                    .toList();
+            if (visible.size() < 2) {
+                continue;
+            }
+            visible.forEach(paragraph::before);
+            paragraph.remove();
+        }
+    }
+
+    private static Element copyParagraph(Element source) {
+        Element copy = new Element("p");
+        copy.attributes().addAll(source.attributes());
+        return copy;
     }
 
     private static String cleanOfficeLinkTarget(String href) {

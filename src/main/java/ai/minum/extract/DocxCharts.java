@@ -2,6 +2,7 @@ package ai.minum.extract;
 
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+import org.jsoup.nodes.TextNode;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
@@ -59,6 +60,15 @@ final class DocxCharts {
                     candidate.before(rendered);
                     candidate.remove();
                 }
+                used.add(rendered);
+                restored++;
+                continue;
+            }
+            TextNode flatText = findFlatChartText(document, chart.flatValues());
+            if (flatText != null) {
+                Element rendered = renderChart(chart);
+                flatText.before(rendered);
+                flatText.remove();
                 used.add(rendered);
                 restored++;
                 continue;
@@ -321,6 +331,14 @@ final class DocxCharts {
                 }
             }
         }
+        return matches.size() == 1 ? matches.getFirst() : null;
+    }
+
+    private static TextNode findFlatChartText(Document document, String flat) {
+        String expected = normalize(flat);
+        List<TextNode> matches = document.body().textNodes().stream()
+                .filter(candidate -> normalize(candidate.getWholeText()).equals(expected))
+                .toList();
         return matches.size() == 1 ? matches.getFirst() : null;
     }
 

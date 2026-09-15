@@ -193,6 +193,7 @@ final class DocComments {
     private static String clean(String text) {
         return text == null ? "" : text.replace("\u0002", "").replace("\u0005", "")
                 .replace("\u0007", "").replace("\uFFFD", "")
+                .replaceAll("[\\x00-\\x1F\\x7F]", " ")
                 .replaceAll("\\s+", " ").strip();
     }
 
