@@ -1,6 +1,5 @@
 package ai.minum.extract;
 
-import lombok.Getter;
 import org.apache.poi.hwpf.usermodel.PictureType;
 
 public class ImageResult {
@@ -27,7 +26,6 @@ public class ImageResult {
         return data;
     }
 
-    @Getter
     public enum Format {
         JPEG("image/jpeg"),
         JPEG2000("image/jp2"),
@@ -43,6 +41,10 @@ public class ImageResult {
 
         Format(String mimeType) {
             this.mimeType = mimeType;
+        }
+
+        public String getMimeType() {
+            return mimeType;
         }
 
         public static Format fromMimeType(String mimeType) {

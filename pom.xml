@@ -9,12 +9,10 @@
     <version>1.0-SNAPSHOT</version>
 
     <properties>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
+        <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <httpclient.version>4.5.3</httpclient.version>
-        <hutool.version>5.8.26</hutool.version>
-        <lombok.version>1.18.30</lombok.version>
+        <httpclient.version>4.5.14</httpclient.version>
+        <hutool.version>5.8.47</hutool.version>
     </properties>
 
 
@@ -23,7 +21,7 @@
             <dependency>
                 <groupId>org.apache.tika</groupId>
                 <artifactId>tika-bom</artifactId>
-                <version>3.1.0</version>
+                <version>4.0.0</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -41,14 +39,7 @@
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
-            <version>2.0.16</version>
-        </dependency>
-
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <version>${lombok.version}</version>
-            <scope>provided</scope>
+            <version>2.0.18</version>
         </dependency>
         <dependency>
             <groupId>cn.hutool</groupId>
@@ -73,6 +64,7 @@
         <dependency>
             <groupId>org.apache.tika</groupId>
             <artifactId>tika-parsers-standard-package</artifactId>
+            <type>pom</type>
         </dependency>
 
         <dependency>
@@ -83,13 +75,19 @@
         <dependency>
             <groupId>org.jsoup</groupId>
             <artifactId>jsoup</artifactId>
-            <version>1.18.3</version>
+            <version>1.23.2</version>
         </dependency>
 
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>5.11.4</version>
+            <version>6.1.3</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml-full</artifactId>
+            <version>5.5.1</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -100,12 +98,12 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.5.2</version>
+                <version>3.6.0</version>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
-                <version>3.6.0</version>
+                <version>3.6.2</version>
                 <executions>
                     <execution>
                         <phase>package</phase>
@@ -148,20 +146,16 @@
                     </execution>
                 </executions>
             </plugin>
-            <!---省略多余的plugin-->
-            <!-- 上传源码 -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-source-plugin</artifactId>
-                <version>3.0.1</version>
-                <configuration>
-                    <attach>true</attach>
-                </configuration>
+                <version>3.4.0</version>
                 <executions>
                     <execution>
-                        <phase>compile</phase>
+                        <id>attach-sources</id>
+                        <phase>package</phase>
                         <goals>
-                            <goal>jar</goal>
+                            <goal>jar-no-fork</goal>
                         </goals>
                     </execution>
                 </executions>

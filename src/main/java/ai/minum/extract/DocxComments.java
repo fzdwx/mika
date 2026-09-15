@@ -55,7 +55,7 @@ final class DocxComments {
                 .flatMap(comment -> comment.paragraphs.stream())
                 .filter(value -> !value.isBlank())
                 .toList();
-        if (flattenedParagraphs.isEmpty() || !removeFlattenedCommentTail(document, flattenedParagraphs)) {
+        if (flattenedParagraphs.isEmpty() || !removeTikaCommentText(document, flattenedParagraphs)) {
             return 0;
         }
 
@@ -204,6 +204,34 @@ final class DocxComments {
             }
             return result;
         }
+    }
+
+    private static boolean removeTikaCommentText(Document document, List<String> expected) {
+        List<Element> commentContainers = document.select("div.comment");
+        if (!commentContainers.isEmpty()) {
+            List<String> actual = commentContainers.stream()
+                    .flatMap(container -> container.select("p").stream())
+                    .map(Element::text)
+                    .filter(value -> !normalize(value).isEmpty())
+                    .toList();
+            List<String> normalizedExpected = expected.stream()
+                    .filter(value -> !normalize(value).isEmpty())
+                    .toList();
+            if (actual.size() == normalizedExpected.size()) {
+                boolean matches = true;
+                for (int index = 0; index < actual.size(); index++) {
+                    if (!normalize(actual.get(index)).equals(normalize(normalizedExpected.get(index)))) {
+                        matches = false;
+                        break;
+                    }
+                }
+                if (matches) {
+                    commentContainers.forEach(Element::remove);
+                    return true;
+                }
+            }
+        }
+        return removeFlattenedCommentTail(document, expected);
     }
 
     private static boolean removeFlattenedCommentTail(Document document, List<String> expected) {

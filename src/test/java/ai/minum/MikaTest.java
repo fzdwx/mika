@@ -99,6 +99,30 @@ class MikaTest {
                 result.getErrorMessage());
     }
 
+    @Test
+    void tikaFallbackLeavesCallerInputStreamOpen() throws Exception {
+        class CloseTrackingInputStream extends ByteArrayInputStream {
+            private boolean closed;
+
+            CloseTrackingInputStream(byte[] bytes) {
+                super(bytes);
+            }
+
+            @Override
+            public void close() {
+                closed = true;
+            }
+        }
+
+        var input = new CloseTrackingInputStream("Tika 4 stream ownership".getBytes(StandardCharsets.UTF_8));
+        ExtractResult result = Mika.extract("txt", input, ExtractConfig.defaultConfig());
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertFalse(input.closed);
+        input.close();
+        assertTrue(input.closed);
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"dot", "application/vnd.ms-word", "application/vnd.ms-word.template", "application/x-dot"})
     void routesLegacyWordTemplatesToTheDocExtractor(String type) throws Exception {

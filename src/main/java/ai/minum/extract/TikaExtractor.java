@@ -3,6 +3,8 @@ package ai.minum.extract;
 import ai.minum.Mika;
 import org.apache.tika.extractor.EmbeddedDocumentExtractor;
 import org.apache.tika.extractor.ParsingEmbeddedDocumentExtractor;
+import org.apache.tika.io.TikaInputStream;
+import org.apache.tika.metadata.HttpHeaders;
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.metadata.TikaCoreProperties;
 import org.apache.tika.parser.ParseContext;
@@ -19,10 +21,11 @@ import org.xml.sax.ContentHandler;
 import org.xml.sax.SAXException;
 import org.xml.sax.helpers.DefaultHandler;
 
+import java.io.ByteArrayOutputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
@@ -64,9 +67,9 @@ public class TikaExtractor implements Extractor {
         ExtractResult result = ExtractResult.of();
         Parser parser = Mika.getTika().getParser();
         ParseContext context = parseContext(parser);
-        context.set(EmbeddedDocumentExtractor.class, new ParsingEmbeddedDocumentExtractor(context) {
+        context.set(EmbeddedDocumentExtractor.class, new ParsingEmbeddedDocumentExtractor() {
             @Override
-            public boolean shouldParseEmbedded(Metadata metadata) {
+            public boolean shouldParseEmbedded(Metadata metadata, ParseContext embeddedContext) {
                 if (isThumbnail(metadata)) {
                     return false;
                 }
@@ -85,13 +88,14 @@ public class TikaExtractor implements Extractor {
             }
 
             @Override
-            public void parseEmbedded(InputStream input, ContentHandler handler, Metadata metadata,
-                                      boolean outputHtml) throws SAXException, IOException {
+            public void parseEmbedded(TikaInputStream input, ContentHandler handler, Metadata metadata,
+                                      ParseContext embeddedContext, boolean outputHtml)
+                    throws SAXException, IOException {
                 if (isImage(metadata)) {
                     return;
                 }
                 if (isAlternateFormatChunk(metadata)) {
-                    super.parseEmbedded(input, handler, metadata, outputHtml);
+                    super.parseEmbedded(input, handler, metadata, embeddedContext, outputHtml);
                 }
             }
         });
@@ -100,8 +104,13 @@ public class TikaExtractor implements Extractor {
         SizeLimitedOutputStream xhtml = new SizeLimitedOutputStream(config.maxExtractedContentSize());
         ToXMLContentHandler handler = new ToXMLContentHandler(xhtml, StandardCharsets.UTF_8.name());
         Metadata metadata = new Metadata();
-        parser.parse(stream, handler, metadata, context);
-        Document document = Jsoup.parse(xhtml.toString(StandardCharsets.UTF_8));
+        try (TikaInputStream tikaInput = TikaInputStream.get(closeShield(stream))) {
+            parser.parse(tikaInput, handler, metadata, context);
+        }
+        // ToXMLContentHandler emits XHTML as XML, including self-closing inline tags. Parse that
+        // syntax first so <b/> cannot become an opening tag, serialize the established boundaries
+        // as HTML pairs, then apply HTML whitespace and recovery rules to embedded HTML chunks.
+        Document document = parseTikaXhtml(xhtml.toString(StandardCharsets.UTF_8));
         cleanDocument(document, metadata, repeatableSource);
         result.setHasTable(!document.select("table").isEmpty());
         result.setHasImage(!document.select("img").isEmpty());
@@ -153,7 +162,7 @@ public class TikaExtractor implements Extractor {
         // Tika adds the package part name as a synthetic heading around altChunk content. It is an
         // implementation detail rather than Word body text and would otherwise pollute retrieval.
         document.select("div.package-entry > h1:first-child").remove();
-        String contentType = metadata.get(Metadata.CONTENT_TYPE);
+        String contentType = metadata.get(HttpHeaders.CONTENT_TYPE);
         String markdown = contentType != null && contentType.startsWith("text/plain")
                 ? Markdown.fromText(document.body().wholeText())
                 : Markdown.fromHtml(document.body().html());
@@ -162,6 +171,12 @@ public class TikaExtractor implements Extractor {
         }
         result.addPage(0L, markdown);
         return result;
+    }
+
+    static Document parseTikaXhtml(String xhtml) {
+        Document xml = Jsoup.parse(xhtml, "", org.jsoup.parser.Parser.xmlParser());
+        xml.outputSettings().syntax(Document.OutputSettings.Syntax.html);
+        return Jsoup.parse(xml.outerHtml());
     }
 
     static String meaningfulAlternativeText(String value, String imageName) {
@@ -246,11 +261,11 @@ public class TikaExtractor implements Extractor {
         Iterator<String> anonymousImageNames = anonymousImages.stream()
                 .filter(selectedImages::contains).iterator();
         ParseContext context = parseContext(parser);
-        context.set(EmbeddedDocumentExtractor.class, new ParsingEmbeddedDocumentExtractor(context) {
+        context.set(EmbeddedDocumentExtractor.class, new ParsingEmbeddedDocumentExtractor() {
             private int alternateFormatDepth;
 
             @Override
-            public boolean shouldParseEmbedded(Metadata metadata) {
+            public boolean shouldParseEmbedded(Metadata metadata, ParseContext embeddedContext) {
                 String name = metadata.get(TikaCoreProperties.RESOURCE_NAME_KEY);
                 return isAlternateFormatChunk(metadata)
                         || isImage(metadata) && (name == null && alternateFormatDepth > 0
@@ -258,12 +273,13 @@ public class TikaExtractor implements Extractor {
             }
 
             @Override
-            public void parseEmbedded(InputStream input, ContentHandler handler, Metadata metadata,
-                                      boolean outputHtml) throws SAXException, IOException {
+            public void parseEmbedded(TikaInputStream input, ContentHandler handler, Metadata metadata,
+                                      ParseContext embeddedContext, boolean outputHtml)
+                    throws SAXException, IOException {
                 if (isAlternateFormatChunk(metadata)) {
                     alternateFormatDepth++;
                     try {
-                        super.parseEmbedded(input, handler, metadata, outputHtml);
+                        super.parseEmbedded(input, handler, metadata, embeddedContext, outputHtml);
                     } finally {
                         alternateFormatDepth--;
                     }
@@ -284,7 +300,7 @@ public class TikaExtractor implements Extractor {
                 int limit = (int) Math.min((long) config.imageExtractMaxSize() + 1, Integer.MAX_VALUE);
                 byte[] bytes = input.readNBytes(Math.max(0, limit));
                 ImageResult image = ImageResult.of(bytes,
-                        ImageResult.Format.fromMimeType(metadata.get(Metadata.CONTENT_TYPE)));
+                        ImageResult.Format.fromMimeType(metadata.get(HttpHeaders.CONTENT_TYPE)));
                 try {
                     processed.put(name, extractImage(config, image, result));
                 } catch (Exception e) {
@@ -292,7 +308,7 @@ public class TikaExtractor implements Extractor {
                 }
             }
         });
-        try (InputStream secondPass = Files.newInputStream(source)) {
+        try (TikaInputStream secondPass = TikaInputStream.get(source)) {
             parser.parse(secondPass, new DefaultHandler(), new Metadata(), context);
         }
         return processed;
@@ -317,14 +333,23 @@ public class TikaExtractor implements Extractor {
         context.set(TesseractOCRConfig.class, ocr);
         OfficeParserConfig office = new OfficeParserConfig();
         office.setConcatenatePhoneticRuns(false);
-        office.setUseSAXDocxExtractor(true);
         context.set(OfficeParserConfig.class, office);
         return context;
     }
 
     private static boolean isImage(Metadata metadata) {
-        String type = metadata.get(Metadata.CONTENT_TYPE);
+        String type = metadata.get(HttpHeaders.CONTENT_TYPE);
         return type != null && type.startsWith("image/");
+    }
+
+    private static InputStream closeShield(InputStream stream) {
+        return new FilterInputStream(stream) {
+            @Override
+            public void close() {
+                // The caller owns the source stream. TikaInputStream still closes its own
+                // temporary resources without closing the stream supplied to Mika.
+            }
+        };
     }
 
     private static boolean isThumbnail(Metadata metadata) {

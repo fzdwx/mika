@@ -28,6 +28,18 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class OfficeMarkdownTest {
+    @Test
+    void selfClosingTikaInlineTagDoesNotWrapFollowingParagraphs() {
+        var document = TikaExtractor.parseTikaXhtml(
+                "<html xmlns='http://www.w3.org/1999/xhtml'><body>"
+                        + "<p><b /></p><p>first paragraph</p><p>second paragraph</p>"
+                        + "</body></html>");
+
+        assertTrue(document.select("b").first().text().isEmpty());
+        assertTrue(document.select("b p").isEmpty());
+        assertEquals("first paragraph\n\nsecond paragraph", Markdown.fromHtml(document.body().html()));
+    }
+
 
     /** Apache POI test-data/document/chartex.docx (Apache-2.0). */
     @Test
