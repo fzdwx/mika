@@ -24,6 +24,7 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -87,6 +88,23 @@ class PDFExtractTest {
             assertTrue(result.getMarkdown().contains("Apache Tika is a toolkit for detecting"),
                     result.getMarkdown());
             assertTrue(result.getMarkdown().lines().count() < 50, result.getMarkdown());
+        }
+    }
+
+    /** Apache PDFBox PDFBOX-5747 reduced fixture (Apache-2.0). */
+    @Test
+    void repairsSupplementaryCharactersSplitByCombiningMarks() throws Exception {
+        try (var input = getClass().getResourceAsStream(
+                "/documents/pdfbox-unicode-surrogate-diacritic.pdf")) {
+            assertTrue(input != null);
+
+            ExtractResult result = Mika.extract("pdf", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertEquals("\uD835\uDC4B\u0302", result.getMarkdown());
+            assertEquals(6, result.getMarkdown().getBytes(StandardCharsets.UTF_8).length);
+            assertEquals("before\uFFFDmiddle\uFFFDafter",
+                    PDFExtract.normalizeExtractedUnicode("before\uD835middle\uDC4Bafter"));
         }
     }
 

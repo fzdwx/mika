@@ -106,7 +106,50 @@ public class PDFExtract implements Extractor {
         reader.setSortByPosition(sortByPosition);
         reader.setStartPage(pageIndex + 1);
         reader.setEndPage(pageIndex + 1);
-        return reader.getText(document);
+        return normalizeExtractedUnicode(reader.getText(document));
+    }
+
+    static String normalizeExtractedUnicode(String text) {
+        StringBuilder normalized = new StringBuilder(text.length());
+        for (int index = 0; index < text.length();) {
+            char character = text.charAt(index);
+            if (Character.isHighSurrogate(character)) {
+                if (index + 1 < text.length() && Character.isLowSurrogate(text.charAt(index + 1))) {
+                    normalized.append(character).append(text.charAt(index + 1));
+                    index += 2;
+                    continue;
+                }
+
+                // PDFBox can place a combining mark between the two UTF-16 code units of a
+                // supplementary character (PDFBOX-5747). Rejoin the pair and retain the marks
+                // after the completed code point so the result can always be encoded as UTF-8.
+                int lowSurrogate = index + 1;
+                while (lowSurrogate < text.length() && isCombiningMark(text.charAt(lowSurrogate))) {
+                    lowSurrogate++;
+                }
+                if (lowSurrogate < text.length()
+                        && Character.isLowSurrogate(text.charAt(lowSurrogate))) {
+                    normalized.append(character).append(text.charAt(lowSurrogate));
+                    normalized.append(text, index + 1, lowSurrogate);
+                    index = lowSurrogate + 1;
+                    continue;
+                }
+                normalized.append('\uFFFD');
+            } else if (Character.isLowSurrogate(character)) {
+                normalized.append('\uFFFD');
+            } else {
+                normalized.append(character);
+            }
+            index++;
+        }
+        return normalized.toString();
+    }
+
+    private static boolean isCombiningMark(char character) {
+        int type = Character.getType(character);
+        return type == Character.NON_SPACING_MARK
+                || type == Character.COMBINING_SPACING_MARK
+                || type == Character.ENCLOSING_MARK;
     }
 
     static boolean isPredominantlyRightToLeft(String text) {
