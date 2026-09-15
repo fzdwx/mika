@@ -14,9 +14,13 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Uses Tika's Word structure instead of flattening table cells and field contents. */
 public class DocExtract extends TikaExtractor {
+    private static final Pattern PHONETIC_FIELD = Pattern.compile(
+            "(?is)^\\s*EQ\\b.*?\\\\o\\\\ad\\(\\\\s\\\\up\\s+\\d+\\(([^()]*)\\),([^()]*)\\)\\s*$");
     private static final Set<String> FIELD_TYPES = Set.of(
             "ADDIN", "ADDRESSBLOCK", "ADVANCE", "ASK", "AUTHOR", "AUTONUM", "AUTONUMLGL",
             "AUTONUMOUT", "AUTOTEXT", "AUTOTEXTLIST", "BARCODE", "BIBLIOGRAPHY", "CITATION",
@@ -59,7 +63,7 @@ public class DocExtract extends TikaExtractor {
         // both the internal instruction and its illegal control markers, matching normal Word text.
         for (var element : document.getAllElements()) {
             for (TextNode text : element.textNodes()) {
-                text.text(cleanLegacyFields(text.getWholeText()));
+                text.text(cleanLegacyPhoneticField(cleanLegacyFields(text.getWholeText())));
             }
         }
 
@@ -204,6 +208,16 @@ public class DocExtract extends TikaExtractor {
         }
         cleaned.append(value, copiedThrough, value.length());
         return cleaned.toString();
+    }
+
+    private static String cleanLegacyPhoneticField(String value) {
+        Matcher field = PHONETIC_FIELD.matcher(value);
+        if (!field.matches()) {
+            return value;
+        }
+        String reading = field.group(1).strip();
+        String base = field.group(2).strip();
+        return base.isBlank() || reading.isBlank() ? value : base + "（" + reading + "）";
     }
 
     private static boolean containsLineBreak(String value, int start, int end) {

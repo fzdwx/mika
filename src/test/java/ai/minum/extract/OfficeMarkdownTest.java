@@ -30,6 +30,208 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class OfficeMarkdownTest {
 
+    /** LibreOffice sw/qa/extras/ooxmlexport/data/math-d.docx (MPL-2.0). */
+    @Test
+    void restoresSeveralOmmlEquationsInOneParagraph() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/libreoffice-math-delimiters.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            String markdown = result.getMarkdown();
+            assertTrue(markdown.contains("$\\left(x\\vert y\\vert z\\right)$"), markdown);
+            assertTrue(markdown.contains("$\\left(\\frac{x}{y}\\right)$"), markdown);
+            assertEquals(18, count(markdown, "$"), markdown);
+            assertFalse(markdown.contains("xyz123456abxy"), markdown);
+        }
+    }
+
+    /** LibreOffice sw/qa/extras/ooxmlexport/data/math-rad.docx (MPL-2.0). */
+    @Test
+    void restoresOmmlRadicals() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/libreoffice-math-radicals.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertEquals("$\\sqrt{4}$ $\\sqrt[3]{x+1}$", result.getMarkdown());
+        }
+    }
+
+    /** LibreOffice sw/qa/extras/ooxmlexport/data/math-vertical_stacks.docx (MPL-2.0). */
+    @Test
+    void restoresRepeatedOmmlFractionParagraphsByDocumentOrder() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/libreoffice-math-fractions.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            String markdown = result.getMarkdown();
+            assertTrue(markdown.contains("$\\frac{a}{b}$"), markdown);
+            assertTrue(markdown.contains("$a/b$"), markdown);
+            assertTrue(markdown.contains("$\\genfrac{}{}{0pt}{}{a}{b}$"), markdown);
+            assertEquals(8, count(markdown, "$"), markdown);
+        }
+    }
+
+    /** Apache Tika testWORD_phonetic.doc(x), Apache-2.0. */
+    @Test
+    void preservesWordPhoneticAnnotationsInDocAndDocx() throws Exception {
+        for (String name : List.of("tika-word-phonetic.doc", "tika-word-phonetic.docx")) {
+            try (var input = getClass().getResourceAsStream("/documents/" + name)) {
+                assertNotNull(input);
+                String type = name.substring(name.lastIndexOf('.') + 1);
+                ExtractResult result = Mika.extract(type, input, ExtractConfig.defaultConfig());
+                assertEquals("東京（とうきょう）", result.getMarkdown(), name + ": " + result.getMarkdown());
+            }
+        }
+    }
+
+    @Test
+    void sourceAwareDocxPassesDoNotDiscardPreviouslyRestoredEquationStructure() throws Exception {
+        java.nio.file.Path source = java.nio.file.Files.createTempFile("mika-mixed-structure-", ".docx");
+        try {
+            try (var output = new java.util.zip.ZipOutputStream(java.nio.file.Files.newOutputStream(source))) {
+                writeZipEntry(output, "word/document.xml", """
+                        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                                    xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                                    xmlns:v="urn:schemas-microsoft-com:vml"
+                                    xmlns:o="urn:schemas-microsoft-com:office:office">
+                          <w:body><w:p>
+                            <w:ruby><w:rt><w:r><w:t>とうきょう</w:t></w:r></w:rt>
+                              <w:rubyBase><w:r><w:t>東京</w:t></w:r></w:rubyBase></w:ruby>
+                            <m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+                              <m:r><m:t>x</m:t></m:r>
+                            </m:oMath>
+                            <w:object><v:shape><v:imagedata r:id="rIdImage"/></v:shape>
+                              <o:OLEObject ProgID="Equation.3" r:id="rIdObject"/></w:object>
+                          </w:p></w:body>
+                        </w:document>
+                        """);
+                writeZipEntry(output, "word/_rels/document.xml.rels", """
+                        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                          <Relationship Id="rIdImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.emf"/>
+                          <Relationship Id="rIdObject" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="embeddings/object1.bin"/>
+                        </Relationships>
+                        """);
+            }
+            org.jsoup.nodes.Document html = Jsoup.parseBodyFragment(
+                    "<p>東京<span class='mika-equation' data-mika-latex='x'>x</span></p>");
+
+            assertEquals(1, DocxPhonetics.restore(html, source));
+            assertEquals("東京（とうきょう）x", html.body().text());
+            assertNotNull(html.selectFirst(".mika-equation"));
+
+            assertEquals(0, DocxObjectPreviews.restore(html, source));
+            assertEquals("東京（とうきょう）x", html.body().text());
+            assertNotNull(html.selectFirst(".mika-equation"));
+        } finally {
+            java.nio.file.Files.deleteIfExists(source);
+        }
+    }
+
+    /** LibreOffice sw/qa/extras/ooxmlexport/data/chart-dupe.docx (MPL-2.0). */
+    @Test
+    void turnsFlatDocxChartCacheIntoOneMarkdownTable() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/libreoffice-chart-dupe.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            String markdown = result.getMarkdown();
+            assertTrue(result.hasTable());
+            assertTrue(markdown.contains("| Category | Trial One | Trial Two | Trial Three | Average |"), markdown);
+            assertTrue(markdown.contains("| Colored Pencil | 2 | 1 | 1 | 1.3 |"), markdown);
+            assertEquals(1, count(markdown, "Trial One"), markdown);
+        }
+    }
+
+    /** LibreOffice sw/qa/extras/ooxmlexport/data/chart-in-footer.docx (MPL-2.0). */
+    @Test
+    void restoresChartCacheFromDocxFooter() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/libreoffice-chart-in-footer.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertTrue(result.hasTable());
+            assertTrue(result.getMarkdown().contains("| Category 1 | 4.3 | 2.4 | 2 |"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("| Category 4 | 4.5 | 2.8 | 5 |"), result.getMarkdown());
+        }
+    }
+
+    @Test
+    void doesNotAppendChartPartsThatAreNotReferencedByVisibleWordContent() throws Exception {
+        java.nio.file.Path source = java.nio.file.Files.createTempFile("mika-stale-chart-", ".docx");
+        try {
+            try (var output = new java.util.zip.ZipOutputStream(java.nio.file.Files.newOutputStream(source))) {
+                writeZipEntry(output, "word/document.xml", """
+                        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                                    xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                          <w:body><w:p><w:r><w:t>Visible body</w:t></w:r></w:p></w:body>
+                        </w:document>
+                        """);
+                writeZipEntry(output, "word/_rels/document.xml.rels", """
+                        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                          <Relationship Id="rIdStale" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="charts/chart1.xml"/>
+                        </Relationships>
+                        """);
+                writeZipEntry(output, "word/charts/chart1.xml", """
+                        <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+                          <c:chart><c:plotArea><c:barChart><c:ser>
+                            <c:tx><c:strRef><c:strCache><c:pt idx="0"><c:v>Hidden</c:v></c:pt></c:strCache></c:strRef></c:tx>
+                            <c:val><c:numRef><c:numCache><c:pt idx="0"><c:v>7</c:v></c:pt></c:numCache></c:numRef></c:val>
+                          </c:ser></c:barChart></c:plotArea></c:chart>
+                        </c:chartSpace>
+                        """);
+            }
+            org.jsoup.nodes.Document html = Jsoup.parseBodyFragment("<p>Visible body</p>");
+
+            assertEquals(0, DocxCharts.restore(html, source));
+            assertEquals("Visible body", html.body().text());
+        } finally {
+            java.nio.file.Files.deleteIfExists(source);
+        }
+    }
+
+    /** LibreOffice sw/qa/extras/ooxmlexport/data/mathtype.docx (MPL-2.0). */
+    @Test
+    void keepsEmbeddedEquationPreviewAtItsWordPosition() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/libreoffice-mathtype.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.hasImage());
+            String markdown = result.getMarkdown();
+            String marker = "[Image]Embedded equation (Equation.3)[ImageEnd]";
+            assertTrue(markdown.contains(marker), markdown);
+            assertTrue(markdown.indexOf("Before") < markdown.indexOf(marker), markdown);
+            assertTrue(markdown.indexOf(marker) < markdown.indexOf("after."), markdown);
+        }
+        try (var input = getClass().getResourceAsStream("/documents/libreoffice-mathtype.docx")) {
+            AtomicReference<ImageResult.Format> uploaded = new AtomicReference<>();
+            ExtractConfig config = ExtractConfig.defaultConfig().imageUploader(image -> {
+                uploaded.set(image.getMimeType());
+                return "objects/equation.emf";
+            });
+            ExtractResult result = Mika.extract("docx", input, config);
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertEquals(ImageResult.Format.EMF, uploaded.get());
+            assertTrue(result.getMarkdown().contains(
+                    "[Image](objects/equation.emf)Embedded equation (Equation.3)[ImageEnd]"),
+                    result.getMarkdown());
+        }
+        try (var input = getClass().getResourceAsStream("/documents/libreoffice-mathtype.docx")) {
+            ExtractConfig config = ExtractConfig.defaultConfig().ocr((bytes, type) -> "unexpected OCR");
+            ExtractResult result = Mika.extract("docx", input, config);
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("[Image]Embedded equation (Equation.3)[ImageEnd]"),
+                    result.getMarkdown());
+            assertTrue(result.getWarnings().stream()
+                    .anyMatch(warning -> warning.contains("OCR skipped for image/emf")),
+                    result.getWarnings().toString());
+        }
+    }
+
     /** LibreOffice sw/qa/extras/ooxmlexport/data/math-matrix.docx (MPL-2.0). */
     @Test
     void restoresOmmlMatrixAsMarkdownMathWithoutFlattenedDuplicate() throws Exception {

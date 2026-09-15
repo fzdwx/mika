@@ -51,7 +51,7 @@ public interface Extractor {
         if (overridesLegacyImageHook()) {
             return new ExtractedImage(extractImage(config, image), "[Image][ImageEnd]");
         }
-        return processImage(config, image, useOcr);
+        return processImage(config, image, useOcr, result);
     }
 
     private boolean overridesLegacyImageHook() {
@@ -64,10 +64,11 @@ public interface Extractor {
     }
 
     default String extractImage(ExtractConfig config, ImageResult result) throws Exception {
-        return processImage(config, result, true).firstPlacement();
+        return processImage(config, result, true, null).firstPlacement();
     }
 
-    private ExtractedImage processImage(ExtractConfig config, ImageResult result, boolean useOcr)
+    private ExtractedImage processImage(ExtractConfig config, ImageResult result, boolean useOcr,
+                                        ExtractResult extractionResult)
             throws Exception {
         if (result.length() > config.imageExtractMaxSize()) {
             return new ExtractedImage("", "");
@@ -85,12 +86,24 @@ public interface Extractor {
             if (config.getOcr() == null) {
                 throw new IllegalStateException("OCR is enabled but no OCR backend is configured");
             }
-            ImageResult ocrImage = config.ocrAccepts(result.getMimeType())
-                    ? result : rasterizeForOcr(result);
-            imageContent = config.getOcr().recognize(
-                    ocrImage.getData(), ocrImage.getMimeType().getMimeType());
-            if (imageContent == null) {
-                imageContent = "";
+            ImageResult ocrImage = result;
+            if (!config.ocrAccepts(result.getMimeType())) {
+                try {
+                    ocrImage = rasterizeForOcr(result);
+                } catch (IOException | RuntimeException rasterizationFailure) {
+                    ocrImage = null;
+                    addRasterizationWarning(extractionResult, result, rasterizationFailure);
+                } catch (AssertionError rasterizationFailure) {
+                    ocrImage = null;
+                    addRasterizationWarning(extractionResult, result, rasterizationFailure);
+                }
+            }
+            if (ocrImage != null) {
+                imageContent = config.getOcr().recognize(
+                        ocrImage.getData(), ocrImage.getMimeType().getMimeType());
+                if (imageContent == null) {
+                    imageContent = "";
+                }
             }
         }
 
@@ -102,6 +115,23 @@ public interface Extractor {
             imageKey = config.imageUploader().upload(result);
         }
         return new ExtractedImage(Markdown.image(imageKey, imageContent), Markdown.image(imageKey, ""));
+    }
+
+    private static void addRasterizationWarning(ExtractResult extractionResult, ImageResult image,
+                                                Throwable failure) throws IOException {
+        if (extractionResult == null) {
+            if (failure instanceof IOException io) {
+                throw io;
+            }
+            throw new IOException("Cannot rasterize " + image.getMimeType().getMimeType(), failure);
+        }
+        String message = failure.getMessage();
+        if (message != null && message.length() > 160) {
+            message = message.substring(0, 160);
+        }
+        extractionResult.addWarning("OCR skipped for " + image.getMimeType().getMimeType()
+                + " because it could not be rasterized"
+                + (message == null || message.isBlank() ? "" : ": " + message));
     }
 
     private static ImageResult rasterizeForOcr(ImageResult source) throws IOException {

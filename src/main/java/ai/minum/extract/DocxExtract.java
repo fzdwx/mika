@@ -66,6 +66,24 @@ public class DocxExtract extends TikaExtractor {
             // restored as Markdown math.
             logger.warn("Failed to restore DOCX equation structure", e);
         }
+        try {
+            DocxPhonetics.restore(document, repeatableSource);
+        } catch (Exception e) {
+            // Keep Tika's base text if a ruby annotation is malformed.
+            logger.warn("Failed to restore DOCX phonetic annotations", e);
+        }
+        try {
+            DocxObjectPreviews.restore(document, repeatableSource);
+        } catch (Exception e) {
+            // Keep Tika's body text if an embedded object's fallback preview is malformed.
+            logger.warn("Failed to restore DOCX embedded object previews", e);
+        }
+        try {
+            DocxCharts.restore(document, repeatableSource);
+        } catch (Exception e) {
+            // Keep Tika's flat chart cache text if an unusual chart cannot be structured.
+            logger.warn("Failed to restore DOCX chart structure", e);
+        }
     }
 
     @Override

@@ -31,6 +31,11 @@ final class DocxPackageRepair {
               <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
             </Types>
             """;
+    // Tika 4 eagerly parses EMF object icons only to recover a display name. Mika processes images
+    // in its own bounded second pass, so give those parts a private type and identify them by their
+    // extension. This avoids malformed vector previews aborting otherwise readable DOCX files.
+    private static final byte[] TIKA_EMF_TYPE = "image/x-emf".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] MIKA_EMF_TYPE = "application/x-mika-emf".getBytes(StandardCharsets.US_ASCII);
 
     private DocxPackageRepair() {
     }
@@ -40,7 +45,7 @@ final class DocxPackageRepair {
         // limits so every valid DOCX keeps Tika/POI's established compatibility and avoids a
         // second full decompression pass.
         if (hasContentTypesPart(source)) {
-            return new Repair(source, false);
+            return new Repair(rewriteEmfContentType(source), false);
         }
 
         Set<String> names = new HashSet<>();
@@ -76,6 +81,100 @@ final class DocxPackageRepair {
             output.closeEntry();
         }
         return new Repair(repaired.toByteArray(), true);
+    }
+
+    private static byte[] rewriteEmfContentType(byte[] source) throws IOException {
+        if (!hasEmfContentType(source)) {
+            return source;
+        }
+        ByteArrayOutputStream rewritten = new ByteArrayOutputStream(source.length + 64);
+        boolean changed = false;
+        int entries = 0;
+        long expanded = 0;
+        Set<String> names = new HashSet<>();
+        try (ZipInputStream archive = new ZipInputStream(new ByteArrayInputStream(source));
+             ZipOutputStream output = new ZipOutputStream(rewritten)) {
+            ZipEntry entry;
+            while ((entry = archive.getNextEntry()) != null) {
+                if (++entries > MAX_ENTRIES) {
+                    throw new IOException("DOCX package has too many entries");
+                }
+                if (!names.add(entry.getName())) {
+                    throw new IOException("DOCX package contains duplicate entry: " + entry.getName());
+                }
+                ZipEntry copy = new ZipEntry(entry.getName());
+                if (entry.getTime() >= 0) {
+                    copy.setTime(entry.getTime());
+                }
+                output.putNextEntry(copy);
+                if ("[Content_Types].xml".equals(entry.getName())) {
+                    byte[] bytes = archive.readNBytes((int) MAX_EXPANDED_BYTES + 1);
+                    if (bytes.length > MAX_EXPANDED_BYTES) {
+                        throw new IOException("DOCX expanded package size limit exceeded");
+                    }
+                    byte[] safe = replace(bytes, TIKA_EMF_TYPE, MIKA_EMF_TYPE);
+                    changed |= safe != bytes;
+                    output.write(safe);
+                    expanded += bytes.length;
+                } else {
+                    expanded = copyBounded(archive, output, expanded);
+                }
+                output.closeEntry();
+            }
+        }
+        return changed ? rewritten.toByteArray() : source;
+    }
+
+    private static boolean hasEmfContentType(byte[] source) throws IOException {
+        try (ZipInputStream archive = new ZipInputStream(new ByteArrayInputStream(source))) {
+            ZipEntry entry;
+            while ((entry = archive.getNextEntry()) != null) {
+                if (!"[Content_Types].xml".equals(entry.getName())) {
+                    continue;
+                }
+                byte[] bytes = archive.readNBytes((int) MAX_EXPANDED_BYTES + 1);
+                if (bytes.length > MAX_EXPANDED_BYTES) {
+                    throw new IOException("DOCX content types size limit exceeded");
+                }
+                return indexOf(bytes, TIKA_EMF_TYPE) >= 0;
+            }
+        }
+        return false;
+    }
+
+    private static byte[] replace(byte[] source, byte[] expected, byte[] replacement) {
+        int match = indexOf(source, expected);
+        if (match < 0) {
+            return source;
+        }
+        ByteArrayOutputStream result = new ByteArrayOutputStream(
+                source.length + replacement.length - expected.length);
+        int copied = 0;
+        while (match >= 0) {
+            result.write(source, copied, match - copied);
+            result.writeBytes(replacement);
+            copied = match + expected.length;
+            match = indexOf(source, expected, copied);
+        }
+        result.write(source, copied, source.length - copied);
+        return result.toByteArray();
+    }
+
+    private static int indexOf(byte[] source, byte[] expected) {
+        return indexOf(source, expected, 0);
+    }
+
+    private static int indexOf(byte[] source, byte[] expected, int start) {
+        outer:
+        for (int index = Math.max(0, start); index <= source.length - expected.length; index++) {
+            for (int offset = 0; offset < expected.length; offset++) {
+                if (source[index + offset] != expected[offset]) {
+                    continue outer;
+                }
+            }
+            return index;
+        }
+        return -1;
     }
 
     private static boolean hasContentTypesPart(byte[] source) throws IOException {

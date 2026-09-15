@@ -39,6 +39,7 @@ import java.util.Set;
 import java.util.UUID;
 
 public class TikaExtractor implements Extractor {
+    private static final String MIKA_EMF_CONTENT_TYPE = "application/x-mika-emf";
     @Override
     public ExtractResult doExtract(ExtractConfig config, InputStream stream) throws Exception {
         if (!requiresRepeatableSource() && !config.ocr() && !config.uploadImage()) {
@@ -403,8 +404,7 @@ public class TikaExtractor implements Extractor {
                 }
                 int limit = (int) Math.min((long) config.imageExtractMaxSize() + 1, Integer.MAX_VALUE);
                 byte[] bytes = input.readNBytes(Math.max(0, limit));
-                ImageResult image = ImageResult.of(bytes,
-                        ImageResult.Format.fromMimeType(metadata.get(HttpHeaders.CONTENT_TYPE)));
+                ImageResult image = ImageResult.of(bytes, imageFormat(metadata));
                 try {
                     processed.put(name, extractImage(config, image, result,
                             !imagesWithStructuredText.contains(name)));
@@ -444,7 +444,13 @@ public class TikaExtractor implements Extractor {
 
     private static boolean isImage(Metadata metadata) {
         String type = metadata.get(HttpHeaders.CONTENT_TYPE);
-        return type != null && type.startsWith("image/");
+        return type != null && (type.startsWith("image/") || MIKA_EMF_CONTENT_TYPE.equals(type));
+    }
+
+    private static ImageResult.Format imageFormat(Metadata metadata) {
+        String type = metadata.get(HttpHeaders.CONTENT_TYPE);
+        return MIKA_EMF_CONTENT_TYPE.equals(type) ? ImageResult.Format.EMF
+                : ImageResult.Format.fromMimeType(type);
     }
 
     private static InputStream closeShield(InputStream stream) {

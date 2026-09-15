@@ -13,11 +13,10 @@ import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
+import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -35,29 +34,32 @@ final class DocxMath {
         if (source == null) {
             return 0;
         }
-        List<Equation> equations = read(source);
-        if (equations.isEmpty()) {
+        List<MathParagraph> paragraphs = read(source);
+        if (paragraphs.isEmpty()) {
             return 0;
         }
-        Set<Element> used = Collections.newSetFromMap(new IdentityHashMap<>());
+        Map<String, List<MathParagraph>> paragraphsByText = new LinkedHashMap<>();
+        for (MathParagraph paragraph : paragraphs) {
+            paragraphsByText.computeIfAbsent(normalize(paragraph.flattenedText()), ignored -> new ArrayList<>())
+                    .add(paragraph);
+        }
         int restored = 0;
-        for (Equation equation : equations) {
-            Element candidate = findExactTextContainer(document, equation.flattenedText(), used);
-            if (candidate == null) {
+        for (Map.Entry<String, List<MathParagraph>> entry : paragraphsByText.entrySet()) {
+            List<Element> candidates = findExactTextContainers(document, entry.getKey());
+            // Pair repeated formulas only when OOXML and XHTML have the same number of paragraphs.
+            // This restores position deterministically without guessing among identical prose.
+            if (candidates.size() != entry.getValue().size()) {
                 continue;
             }
-            candidate.empty()
-                    .addClass("mika-equation")
-                    .attr("data-mika-latex", equation.latex())
-                    .attr("data-mika-display", Boolean.toString(equation.display()))
-                    .text(equation.flattenedText());
-            used.add(candidate);
-            restored++;
+            for (int index = 0; index < candidates.size(); index++) {
+                restoreParagraph(candidates.get(index), entry.getValue().get(index));
+                restored += entry.getValue().get(index).equationCount();
+            }
         }
         return restored;
     }
 
-    private static List<Equation> read(Path source) throws Exception {
+    private static List<MathParagraph> read(Path source) throws Exception {
         byte[] xml;
         try (ZipFile archive = new ZipFile(source.toFile())) {
             ZipEntry document = null;
@@ -94,28 +96,100 @@ final class DocxMath {
         if (!withinDepthLimit(sourceDocument)) {
             return List.of();
         }
-        NodeList nodes = sourceDocument.getElementsByTagNameNS("*", "oMath");
-        List<Equation> equations = new ArrayList<>();
-        for (int index = 0; index < nodes.getLength() && equations.size() < MAX_EQUATIONS; index++) {
-            org.w3c.dom.Element math = (org.w3c.dom.Element) nodes.item(index);
-            if (hasAncestor(math, "oMath")) {
+        NodeList nodes = sourceDocument.getElementsByTagNameNS("*", "p");
+        List<MathParagraph> paragraphs = new ArrayList<>();
+        int equationCount = 0;
+        for (int index = 0; index < nodes.getLength() && equationCount < MAX_EQUATIONS; index++) {
+            org.w3c.dom.Element paragraph = (org.w3c.dom.Element) nodes.item(index);
+            String namespace = paragraph.getNamespaceURI();
+            if (namespace == null || !namespace.contains("wordprocessingml")) {
                 continue;
             }
-            String flattened = text(math).strip();
-            String latex = renderChildren(math).strip();
-            if (!flattened.isBlank() && !latex.isBlank() && latex.length() <= MAX_RENDERED_LENGTH) {
-                boolean display = hasAncestor(math, "oMathPara") || hasDescendant(math, "m");
-                equations.add(new Equation(flattened, latex, display));
+            List<Segment> segments = new ArrayList<>();
+            collectSegments(paragraph, segments);
+            int inParagraph = (int) segments.stream().filter(segment -> segment.equation() != null).count();
+            if (inParagraph == 0 || equationCount + inParagraph > MAX_EQUATIONS) {
+                continue;
+            }
+            StringBuilder flattened = new StringBuilder();
+            for (Segment segment : segments) {
+                flattened.append(segment.equation() == null
+                        ? segment.text() : segment.equation().flattenedText());
+            }
+            if (!flattened.toString().isBlank()) {
+                paragraphs.add(new MathParagraph(flattened.toString(), List.copyOf(segments), inParagraph));
+                equationCount += inParagraph;
             }
         }
-        return equations;
+        return paragraphs;
     }
 
-    private static Element findExactTextContainer(Document document, String expected, Set<Element> used) {
-        String normalizedExpected = normalize(expected);
+    private static void collectSegments(Node node, List<Segment> result) {
+        if ("oMath".equals(localName(node)) && !hasAncestor(node, "oMath")) {
+            String flattened = text(node).strip();
+            String latex = renderChildren(node).strip();
+            if (!flattened.isBlank() && !latex.isBlank() && latex.length() <= MAX_RENDERED_LENGTH) {
+                boolean display = hasAncestor(node, "oMathPara") || hasDescendant(node, "m");
+                result.add(new Segment(null, new Equation(flattened, latex, display)));
+            }
+            return;
+        }
+        String name = localName(node);
+        if ("t".equals(name)) {
+            addText(result, node.getTextContent());
+            return;
+        }
+        if ("tab".equals(name)) {
+            addText(result, "\t");
+            return;
+        }
+        if ("br".equals(name) || "cr".equals(name)) {
+            addText(result, "\n");
+            return;
+        }
+        for (Node child = node.getFirstChild(); child != null; child = child.getNextSibling()) {
+            collectSegments(child, result);
+        }
+    }
+
+    private static void addText(List<Segment> result, String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        if (!result.isEmpty() && result.getLast().equation() == null) {
+            Segment previous = result.removeLast();
+            result.add(new Segment(previous.text() + text, null));
+        } else {
+            result.add(new Segment(text, null));
+        }
+    }
+
+    private static void restoreParagraph(Element candidate, MathParagraph paragraph) {
+        candidate.empty();
+        boolean previousEquation = false;
+        for (Segment segment : paragraph.segments()) {
+            Equation equation = segment.equation();
+            if (equation == null) {
+                candidate.appendText(segment.text());
+                previousEquation = false;
+                continue;
+            }
+            if (previousEquation) {
+                candidate.appendText(" ");
+            }
+            candidate.appendElement("span")
+                    .addClass("mika-equation")
+                    .attr("data-mika-latex", equation.latex())
+                    .attr("data-mika-display", Boolean.toString(equation.display()))
+                    .text(equation.flattenedText());
+            previousEquation = true;
+        }
+    }
+
+    private static List<Element> findExactTextContainers(Document document, String normalizedExpected) {
         List<Element> matches = new ArrayList<>();
         for (Element candidate : document.select("p, td, th, li")) {
-            if (used.contains(candidate) || !normalize(candidate.text()).equals(normalizedExpected)) {
+            if (!normalize(candidate.text()).equals(normalizedExpected)) {
                 continue;
             }
             boolean matchingChild = candidate.select("p, td, th, li").stream()
@@ -125,9 +199,7 @@ final class DocxMath {
                 matches.add(candidate);
             }
         }
-        // Without a source-to-XHTML position map, replacing one of several identical paragraphs can
-        // mark ordinary prose as an equation. Preserve Tika's flat text in that ambiguous case.
-        return matches.size() == 1 ? matches.getFirst() : null;
+        return matches;
     }
 
     private static String render(Node node) {
@@ -142,15 +214,18 @@ final class DocxMath {
             case "sSub" -> group(child(node, "e")) + "_{" + render(child(node, "sub")) + "}";
             case "sSubSup" -> group(child(node, "e")) + "_{" + render(child(node, "sub"))
                     + "}^{" + render(child(node, "sup")) + "}";
-            case "f" -> "\\frac{" + render(child(node, "num")) + "}{" + render(child(node, "den")) + "}";
+            case "sPre" -> "{}_{" + render(child(node, "sub")) + "}^{"
+                    + render(child(node, "sup")) + "}" + group(child(node, "e"));
+            case "f" -> fraction(node);
             case "rad" -> radical(node);
             case "d" -> delimiter(node);
             case "m" -> matrix(node, "matrix");
             case "nary" -> nary(node);
-            case "limLow" -> group(child(node, "e")) + "_{" + render(child(node, "lim")) + "}";
-            case "limUpp" -> group(child(node, "e")) + "^{" + render(child(node, "lim")) + "}";
+            case "limLow" -> functionName(child(node, "e")) + "_{" + render(child(node, "lim")) + "}";
+            case "limUpp" -> functionName(child(node, "e")) + "^{" + render(child(node, "lim")) + "}";
             case "acc" -> accent(node);
-            case "groupChr" -> render(child(node, "e"));
+            case "bar" -> bar(node);
+            case "groupChr" -> groupCharacter(node);
             case "eqArr" -> equationArray(node);
             case "num", "den", "sup", "sub", "deg", "lim", "mr" -> renderChildren(node);
             default -> isPropertyElement(name) ? "" : renderChildren(node);
@@ -163,10 +238,23 @@ final class DocxMath {
         return degree.isBlank() ? "\\sqrt{" + body + "}" : "\\sqrt[" + degree + "]{" + body + "}";
     }
 
+    private static String fraction(Node node) {
+        String numerator = render(child(node, "num"));
+        String denominator = render(child(node, "den"));
+        String type = propertyValue(node, "type", "bar");
+        return switch (type) {
+            case "lin" -> group(child(node, "num")) + "/" + group(child(node, "den"));
+            case "noBar" -> "\\genfrac{}{}{0pt}{}{"
+                    + numerator + "}{" + denominator + "}";
+            default -> "\\frac{" + numerator + "}{" + denominator + "}";
+        };
+    }
+
     private static String delimiter(Node node) {
         String beginning = propertyValue(node, "begChr", "(");
         String ending = propertyValue(node, "endChr", ")");
-        Node body = child(node, "e");
+        List<Node> bodies = children(node, "e");
+        Node body = bodies.isEmpty() ? null : bodies.getFirst();
         Node matrix = child(body, "m");
         if (matrix != null && "[".equals(beginning) && "]".equals(ending)) {
             return matrix(matrix, "bmatrix");
@@ -174,7 +262,10 @@ final class DocxMath {
         if (matrix != null && "(".equals(beginning) && ")".equals(ending)) {
             return matrix(matrix, "pmatrix");
         }
-        return "\\left" + delimiterCharacter(beginning) + render(body)
+        String separator = propertyValue(node, "sepChr", "|");
+        String content = String.join(delimiterCharacter(separator),
+                bodies.stream().map(DocxMath::render).toList());
+        return "\\left" + delimiterCharacter(beginning) + content
                 + "\\right" + delimiterCharacter(ending);
     }
 
@@ -197,6 +288,11 @@ final class DocxMath {
             case "∑" -> "\\sum";
             case "∏" -> "\\prod";
             case "∫" -> "\\int";
+            case "∬" -> "\\iint";
+            case "∭" -> "\\iiint";
+            case "∮" -> "\\oint";
+            case "∯" -> "\\oiint";
+            case "∰" -> "\\oiiint";
             default -> latexText(operator);
         };
         String subscript = render(child(node, "sub"));
@@ -212,8 +308,29 @@ final class DocxMath {
             case "̂", "^" -> "\\hat";
             case "̄", "¯" -> "\\bar";
             case "⃗", "→" -> "\\vec";
+            case "́" -> "\\acute";
+            case "̀" -> "\\grave";
+            case "̌" -> "\\check";
+            case "̆" -> "\\breve";
+            case "̊" -> "\\mathring";
+            case "̃" -> "\\tilde";
+            case "˙", "̇" -> "\\dot";
             default -> "\\overset{" + latexText(accent) + "}";
         };
+        return command + "{" + render(child(node, "e")) + "}";
+    }
+
+    private static String bar(Node node) {
+        String position = propertyValue(node, "pos", "top");
+        return ("bot".equals(position) ? "\\underline{" : "\\overline{")
+                + render(child(node, "e")) + "}";
+    }
+
+    private static String groupCharacter(Node node) {
+        String character = propertyValue(node, "chr", "⏞");
+        String position = propertyValue(node, "pos", "top");
+        String command = "bot".equals(position) || "⏟".equals(character)
+                ? "\\underbrace" : "\\overbrace";
         return command + "{" + render(child(node, "e")) + "}";
     }
 
@@ -223,6 +340,14 @@ final class DocxMath {
             rows.add(render(expression));
         }
         return "\\begin{aligned}" + String.join(" \\\\ ", rows) + "\\end{aligned}";
+    }
+
+    private static String functionName(Node node) {
+        String value = render(node);
+        return switch (value) {
+            case "lim", "sin", "cos", "tan", "log", "ln", "exp", "min", "max" -> "\\" + value;
+            default -> group(node);
+        };
     }
 
     private static String renderChildren(Node node) {
@@ -267,6 +392,8 @@ final class DocxMath {
                 case '#', '$', '%', '&', '_' -> escaped.append('\\').appendCodePoint(character);
                 case 'π' -> escaped.append("\\pi ");
                 case '∞' -> escaped.append("\\infty ");
+                case '−' -> escaped.append('-');
+                case '→' -> escaped.append("\\to ");
                 case '×' -> escaped.append("\\times ");
                 case '÷' -> escaped.append("\\div ");
                 case '≤' -> escaped.append("\\le ");
@@ -282,6 +409,12 @@ final class DocxMath {
         return switch (value) {
             case "{" -> "\\{";
             case "}" -> "\\}";
+            case "|" -> "\\vert ";
+            case "∥" -> "\\Vert ";
+            case "〈" -> "\\langle ";
+            case "〉" -> "\\rangle ";
+            case "⟦" -> "\\llbracket ";
+            case "⟧" -> "\\rrbracket ";
             case "" -> ".";
             default -> latexText(value);
         };
@@ -394,6 +527,12 @@ final class DocxMath {
     }
 
     private record Equation(String flattenedText, String latex, boolean display) {
+    }
+
+    private record Segment(String text, Equation equation) {
+    }
+
+    private record MathParagraph(String flattenedText, List<Segment> segments, int equationCount) {
     }
 
     private record NodeDepth(Node node, int depth) {
