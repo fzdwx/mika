@@ -52,6 +52,20 @@ public class DocxExtract extends TikaExtractor {
             // turn that successful extraction into an empty/error result.
             logger.warn("Failed to restore DOCX merged table cells", e);
         }
+        try {
+            DocxActiveXControls.restore(document, repeatableSource);
+        } catch (Exception e) {
+            // ActiveX is optional legacy content. Keep the successfully parsed Word body when a
+            // control uses an unknown persistence format or contains a damaged OLE stream.
+            logger.warn("Failed to restore DOCX ActiveX text box values", e);
+        }
+        try {
+            DocxMath.restore(document, repeatableSource);
+        } catch (Exception e) {
+            // Keep Tika's readable flattened formula when an unfamiliar OMML construct cannot be
+            // restored as Markdown math.
+            logger.warn("Failed to restore DOCX equation structure", e);
+        }
     }
 
     @Override

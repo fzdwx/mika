@@ -123,13 +123,16 @@ final class DocComments {
             }
             return references;
         } catch (RuntimeException malformedReferences) {
-            result.addWarning("Old Word comment author mapping was unavailable; comment order was retained");
             List<Reference> references = new ArrayList<>();
             String mainText = word.getRange().text();
             for (int index = 0; index < mainText.length(); index++) {
                 if (mainText.charAt(index) == ANNOTATION_REFERENCE) {
                     references.add(new Reference(index, ""));
                 }
+            }
+            String commentText = clean(Range.stripFields(word.getCommentsRange().text()));
+            if (!references.isEmpty() || !commentText.isBlank()) {
+                result.addWarning("Old Word comment author mapping was unavailable; comment order was retained");
             }
             return references;
         }

@@ -30,6 +30,132 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class OfficeMarkdownTest {
 
+    /** LibreOffice sw/qa/extras/ooxmlexport/data/math-matrix.docx (MPL-2.0). */
+    @Test
+    void restoresOmmlMatrixAsMarkdownMathWithoutFlattenedDuplicate() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/libreoffice-math-matrix.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            String markdown = result.getMarkdown();
+            assertTrue(markdown.contains("\\begin{bmatrix}1 & 2 \\\\ 3 & 4\\end{bmatrix}"), markdown);
+            assertFalse(markdown.contains("1234"), markdown);
+            assertEquals(2, count(markdown, "$$"), markdown);
+        }
+    }
+
+    /** LibreOffice sw/qa/extras/ooxmlexport/data/strict.docx (MPL-2.0). */
+    @Test
+    void restoresOmmlSuperscriptAsMarkdownMath() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/libreoffice-strict-ooxml.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            String markdown = result.getMarkdown();
+            assertTrue(markdown.contains("A=\\pi r^{2}"), markdown);
+            assertFalse(markdown.contains("A=πr2"), markdown);
+        }
+    }
+
+    /** LibreOffice sw/qa/extras/ooxmlexport/data/activex_textbox.docx (MPL-2.0). */
+    @Test
+    void restoresVisibleActiveXTextBoxValuesFromDocxStorage() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/libreoffice-activex-textbox.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            String markdown = result.getMarkdown();
+            assertTrue(markdown.contains("### Form controls"), markdown);
+            assertTrue(markdown.contains("**TextBox1**: This is a multiline text in an activex textbox"),
+                    markdown);
+            assertTrue(markdown.contains("**TextBox11**: This is a singleline text in an activex textbox"),
+                    markdown);
+            assertEquals(1, count(markdown, "This is a multiline text in an activex textbox"), markdown);
+            assertEquals(1, count(markdown, "This is a singleline text in an activex textbox"), markdown);
+        }
+    }
+
+    @Test
+    void restoresActiveXTextBoxPropertyBagValue() throws Exception {
+        java.nio.file.Path source = java.nio.file.Files.createTempFile("mika-activex-property-", ".docx");
+        try (var output = new java.util.zip.ZipOutputStream(java.nio.file.Files.newOutputStream(source))) {
+            writeZipEntry(output, "word/document.xml", """
+                    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                      xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                      <w:body><w:p><w:control r:id="rId1" w:name="SearchBox"/></w:p></w:body>
+                    </w:document>
+                    """);
+            writeZipEntry(output, "word/_rels/document.xml.rels", """
+                    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                      <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/control" Target="activeX/activeX1.xml"/>
+                    </Relationships>
+                    """);
+            writeZipEntry(output, "word/activeX/activeX1.xml", """
+                    <ax:ocx xmlns:ax="http://schemas.microsoft.com/office/2006/activeX"
+                      ax:classid="{8BD21D10-EC42-11CE-9E0D-00AA006002F3}"
+                      ax:persistence="persistPropertyBag">
+                      <ax:ocxPr ax:name="Value" ax:value="中文表单值"/>
+                    </ax:ocx>
+                    """);
+        }
+        try {
+            var document = Jsoup.parse("<p></p>");
+            assertEquals(1, DocxActiveXControls.restore(document, source));
+            assertEquals("Form controls SearchBox: 中文表单值", document.text());
+        } finally {
+            java.nio.file.Files.deleteIfExists(source);
+        }
+    }
+
+    /** LibreOffice sw/qa/extras/ooxmlexport/data/EmbeddedExcelChart.docx (MPL-2.0). */
+    @Test
+    void extractsVisibleLegacyExcelChartDataWithoutEnablingGeneralAttachments() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/libreoffice-embedded-excel-chart.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            String markdown = result.getMarkdown();
+            assertTrue(markdown.contains("| | Food | Gas | Motel |"), markdown);
+            assertTrue(markdown.contains("| Jan | 12 | 17 | 10 |"), markdown);
+            assertTrue(markdown.contains("| Jun | 19 | 15 | 20 |"), markdown);
+            assertFalse(markdown.contains("# Chart1"), markdown);
+            assertEquals(1, count(markdown, "| Jan | 12 | 17 | 10 |"), markdown);
+            assertTrue(result.hasTable());
+        }
+    }
+
+    /** Apache POI test-data/document/WordWithAttachments.docx (Apache-2.0). */
+    @Test
+    void keepsOrdinaryEmbeddedOfficeFilesOutOfTheParentDocument() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/poi-word-with-attachments.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("All, who’s young"), result.getMarkdown());
+            assertFalse(result.getMarkdown().contains("this is ooxml"), result.getMarkdown());
+        }
+    }
+
+    /** Apache POI test-data/document/vector_image.doc (Apache-2.0). */
+    @Test
+    void oldWordWithoutCommentsDoesNotReportCommentMappingFailure() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/poi-vector-image.doc")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("doc", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.hasImage());
+            assertTrue(result.getWarnings().stream()
+                    .noneMatch(warning -> warning.contains("comment author mapping")),
+                    result.getWarnings().toString());
+        }
+    }
+
     @Test
     void identifiesFallbackChartPicturesWhenTheChartCacheHasValues() throws Exception {
         java.nio.file.Path document = java.nio.file.Path.of(
@@ -701,6 +827,13 @@ class OfficeMarkdownTest {
             output.finish();
             return bytes.toByteArray();
         }
+    }
+
+    private static void writeZipEntry(java.util.zip.ZipOutputStream output, String name, String value)
+            throws Exception {
+        output.putNextEntry(new java.util.zip.ZipEntry(name));
+        output.write(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        output.closeEntry();
     }
 
     static byte[] png() throws Exception {

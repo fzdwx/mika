@@ -19,6 +19,7 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.xml.sax.ContentHandler;
 import org.xml.sax.SAXException;
+import org.xml.sax.helpers.AttributesImpl;
 import org.xml.sax.helpers.DefaultHandler;
 
 import java.io.ByteArrayOutputStream;
@@ -82,6 +83,12 @@ public class TikaExtractor implements Extractor {
                 if (isAlternateFormatChunk(metadata)) {
                     return true;
                 }
+                // Word stores legacy Excel charts as OLE attachments even though the chart is a
+                // visible part of the page. Parse only chart objects; embedded workbooks and other
+                // arbitrary attachments remain separate documents.
+                if (isVisibleLegacyExcelChart(metadata)) {
+                    return true;
+                }
                 // Attachments are separate documents. Recursive extraction creates ambiguous image
                 // names and unbounded expansion; callers can submit them as independent files.
                 return false;
@@ -96,6 +103,12 @@ public class TikaExtractor implements Extractor {
                 }
                 if (isAlternateFormatChunk(metadata)) {
                     super.parseEmbedded(input, handler, metadata, embeddedContext, outputHtml);
+                } else if (isVisibleLegacyExcelChart(metadata)) {
+                    AttributesImpl attributes = new AttributesImpl();
+                    attributes.addAttribute("", "class", "class", "CDATA", "mika-legacy-excel-chart");
+                    handler.startElement("http://www.w3.org/1999/xhtml", "div", "div", attributes);
+                    super.parseEmbedded(input, handler, metadata, embeddedContext, outputHtml);
+                    handler.endElement("http://www.w3.org/1999/xhtml", "div", "div");
                 }
             }
         });
@@ -111,7 +124,9 @@ public class TikaExtractor implements Extractor {
         // syntax first so <b/> cannot become an opening tag, serialize the established boundaries
         // as HTML pairs, then apply HTML whitespace and recovery rules to embedded HTML chunks.
         Document document = parseTikaXhtml(xhtml.toString(StandardCharsets.UTF_8));
+        removeDuplicateLegacyChartViews(document);
         cleanDocument(document, metadata, repeatableSource, result);
+        Map<String, String> equationMarkers = equationMarkers(document);
         result.setHasTable(!document.select("table").isEmpty());
         result.setHasImage(!document.select("img").isEmpty());
 
@@ -171,6 +186,9 @@ public class TikaExtractor implements Extractor {
         for (Map.Entry<String, String> marker : imageMarkers.entrySet()) {
             markdown = markdown.replace(marker.getKey(), marker.getValue());
         }
+        for (Map.Entry<String, String> marker : equationMarkers.entrySet()) {
+            markdown = markdown.replace(marker.getKey(), marker.getValue());
+        }
         if (splitIntoLogicalSections()) {
             long page = 0;
             for (String section : MarkdownSections.split(markdown)) {
@@ -214,6 +232,71 @@ public class TikaExtractor implements Extractor {
             return "";
         }
         return compact;
+    }
+
+    /** Prefer a chart's structured worksheet when it contains all values in the rendered view. */
+    private static void removeDuplicateLegacyChartViews(Document document) {
+        for (Element chart : document.select("div.mika-legacy-excel-chart")) {
+            java.util.List<Element> pages = new java.util.ArrayList<>(chart.select("div.page"));
+            Element best = null;
+            int bestCells = -1;
+            for (Element page : pages) {
+                int cells = page.select("td, th").size();
+                if (cells > bestCells) {
+                    best = page;
+                    bestCells = cells;
+                }
+            }
+            if (best == null || bestCells == 0) {
+                continue;
+            }
+            Set<String> structuredValues = significantValues(best);
+            for (Element page : pages) {
+                if (page == best) {
+                    continue;
+                }
+                Element copy = page.clone();
+                copy.select("h1:first-child").remove();
+                Set<String> renderedValues = significantValues(copy);
+                if (!renderedValues.isEmpty() && structuredValues.containsAll(renderedValues)) {
+                    page.remove();
+                }
+            }
+            chart.unwrap();
+        }
+    }
+
+    private static Set<String> significantValues(Element element) {
+        Set<String> values = new LinkedHashSet<>();
+        for (String value : element.text().split("\\s+")) {
+            String normalized = value.strip().toLowerCase(java.util.Locale.ROOT);
+            if (!normalized.isEmpty()) {
+                values.add(normalized);
+            }
+        }
+        return values;
+    }
+
+    private static Map<String, String> equationMarkers(Document document) {
+        Map<String, String> markers = new LinkedHashMap<>();
+        int index = 0;
+        String sourceText = document.text();
+        for (Element equation : document.select(".mika-equation[data-mika-latex]")) {
+            String marker;
+            do {
+                marker = "MIKAEQUATIONMARKER"
+                        + UUID.randomUUID().toString().replace("-", "") + index++ + "TOKEN";
+            } while (sourceText.contains(marker));
+            String latex = equation.attr("data-mika-latex");
+            String markdown = Boolean.parseBoolean(equation.attr("data-mika-display"))
+                    ? "$$\n" + latex + "\n$$" : "$" + latex + "$";
+            equation.removeClass("mika-equation")
+                    .removeAttr("data-mika-latex")
+                    .removeAttr("data-mika-display")
+                    .text(marker);
+            markers.put(marker, markdown);
+        }
+        return markers;
     }
 
     private static String appendImageText(String imageBlock, String text) {
@@ -381,6 +464,14 @@ public class TikaExtractor implements Extractor {
     private static boolean isAlternateFormatChunk(Metadata metadata) {
         return "ALTERNATE_FORMAT_CHUNK".equals(
                 metadata.get(TikaCoreProperties.EMBEDDED_RESOURCE_TYPE));
+    }
+
+    private static boolean isVisibleLegacyExcelChart(Metadata metadata) {
+        String programId = metadata.get("msoffice:prog-id");
+        return "ATTACHMENT".equals(metadata.get(TikaCoreProperties.EMBEDDED_RESOURCE_TYPE))
+                && metadata.get(TikaCoreProperties.EMBEDDED_RELATIONSHIP_ID) != null
+                && programId != null
+                && programId.regionMatches(true, 0, "Excel.Chart.", 0, "Excel.Chart.".length());
     }
 
     private static String referencedImageName(Element image) {
