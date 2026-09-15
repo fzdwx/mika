@@ -113,7 +113,7 @@ final class Markdown {
                             }
                         })))
                 .build().convert(document.body().html()).strip();
-        return markdown;
+        return normalizeInvisibleCharacters(markdown).strip();
     }
 
     private static String cleanOfficeLinkTarget(String href) {
@@ -185,7 +185,8 @@ final class Markdown {
         if (text == null || text.isEmpty()) {
             return "";
         }
-        String normalized = text.replace("\r\n", "\n").replace('\r', '\n').replace("\u0000", "");
+        String normalized = normalizeInvisibleCharacters(
+                text.replace("\r\n", "\n").replace('\r', '\n').replace("\u0000", ""));
         StringBuilder escaped = new StringBuilder();
         for (char c : normalized.toCharArray()) {
             if (c == '&') {
@@ -206,6 +207,21 @@ final class Markdown {
                 .replaceAll("(?m)^(\\h*)([=-])(?=[=-]*\\h*$)", "$1\\\\$2")
                 .replaceAll("(?m)^(\\h*\\d+)([.)])(?=\\h)", "$1\\\\$2")
                 .strip();
+    }
+
+    private static String normalizeInvisibleCharacters(String text) {
+        StringBuilder normalized = new StringBuilder(text.length());
+        for (int offset = 0; offset < text.length();) {
+            int codePoint = text.codePointAt(offset);
+            offset += Character.charCount(codePoint);
+            if (codePoint == 0x00A0 || codePoint == 0x2007 || codePoint == 0x202F) {
+                normalized.append(' ');
+            } else if (codePoint != 0x00AD && codePoint != 0x200B
+                    && codePoint != 0x2060 && codePoint != 0xFEFF) {
+                normalized.appendCodePoint(codePoint);
+            }
+        }
+        return normalized.toString();
     }
 
     static String image(String key, String text) {

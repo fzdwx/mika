@@ -1,12 +1,18 @@
 package ai.minum.extract;
 
 import org.apache.tika.metadata.Metadata;
+import org.apache.poi.hwpf.HWPFDocument;
 import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
 import org.jsoup.nodes.Node;
 import org.jsoup.nodes.TextNode;
 
 import java.io.BufferedInputStream;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
 /** Uses Tika's Word structure instead of flattening table cells and field contents. */
@@ -89,6 +95,52 @@ public class DocExtract extends TikaExtractor {
             if (displayedPage != null && displayedPage.text().strip().matches("\\d+")) {
                 displayedPage.remove();
             }
+        }
+    }
+
+    @Override
+    protected boolean requiresRepeatableSource() {
+        return true;
+    }
+
+    @Override
+    protected void cleanDocument(Document document, Metadata metadata, Path repeatableSource) {
+        cleanDocument(document, metadata);
+        if (repeatableSource == null || document.select("img").isEmpty()) {
+            return;
+        }
+        try (InputStream input = Files.newInputStream(repeatableSource);
+             HWPFDocument word = new HWPFDocument(input)) {
+            List<String> descriptions = new ArrayList<>();
+            for (var picture : word.getPicturesTable().getAllPictures()) {
+                try {
+                    String description = meaningfulAlternativeText(
+                            picture.getDescription(), picture.suggestFullFileName());
+                    if (!description.isBlank()) {
+                        descriptions.add(description);
+                    }
+                } catch (RuntimeException malformedPicture) {
+                    logger.debug("Cannot read an old Word image description", malformedPicture);
+                }
+            }
+            if (descriptions.isEmpty()) {
+                return;
+            }
+            List<Element> images = document.select("img");
+            if (images.size() == 1 && descriptions.size() == 1) {
+                images.getFirst().attr("alt", descriptions.getFirst());
+                return;
+            }
+            Element section = document.body().appendElement("section");
+            section.appendElement("h3").text("Image descriptions");
+            Element list = section.appendElement("ul");
+            for (String description : new java.util.LinkedHashSet<>(descriptions)) {
+                list.appendElement("li").text(description);
+            }
+        } catch (Exception malformedDocument) {
+            // Tika has already extracted the visible Word content. Optional accessibility metadata
+            // must not turn that successful result into an error.
+            logger.debug("Cannot extract old Word image descriptions", malformedDocument);
         }
     }
 

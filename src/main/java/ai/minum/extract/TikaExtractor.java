@@ -128,10 +128,13 @@ public class TikaExtractor implements Extractor {
         int markerIndex = 0;
         for (Element image : document.select("img")) {
             String name = referencedImageName(image);
-            if (name == null) {
-                continue;
+            String alternativeText = meaningfulAlternativeText(image.attr("alt"), name);
+            String content = name == null ? null : processedImages.get(name);
+            if (content != null && !content.isBlank() && !alternativeText.isBlank()) {
+                content = appendImageText(content, alternativeText);
+            } else if ((content == null || content.isBlank()) && !alternativeText.isBlank()) {
+                content = Markdown.image("", alternativeText);
             }
-            String content = processedImages.get(name);
             if (content == null || content.isBlank()) {
                 image.remove();
             } else {
@@ -159,6 +162,54 @@ public class TikaExtractor implements Extractor {
         }
         result.addPage(0L, markdown);
         return result;
+    }
+
+    static String meaningfulAlternativeText(String value, String imageName) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String text = value.replace("\r\n", "\n").replace('\r', '\n').strip();
+        String compact = text.replaceAll("(?i)\\s*description automatically generated\\s*$", "")
+                .replaceAll("\\s+", " ").strip();
+        if (imageName != null && compact.equalsIgnoreCase(imageName)) {
+            return "";
+        }
+        if (compact.matches("(?i)(?:image|picture|graphic|shape|drawing|photo|logo|图|图片|图像|形状|文本框)\\s*\\d*(?:\\.[a-z0-9]+)?")) {
+            return "";
+        }
+        if (compact.matches("(?i)[^\\s/\\\\]+\\.(?:png|jpe?g|gif|bmp|tiff?|wmf|emf|svg|webp|jp2|jpx|pict)")) {
+            return "";
+        }
+        if (compact.matches("(?i)(?:https?|file)://.*")
+                || compact.matches("(?i)[a-z]:\\\\.*")
+                || compact.matches("(?i)(?:img|dsc|微信图片)[_-]?\\d+.*")
+                || compact.matches("(?i)△?图片来源[:：].*")
+                || compact.matches("(?i)[0-9a-f]{12,}(?:[_-][a-z0-9]+)?")
+                || compact.matches("\\d{6,}(?:\\(\\d+\\))?")
+                || compact.matches("[\\p{L}_ -]{1,8}\\d{1,4}")) {
+            return "";
+        }
+        return compact;
+    }
+
+    private static String appendImageText(String imageBlock, String text) {
+        String markdown = Markdown.fromText(text);
+        if (markdown.isBlank() || imageBlock.contains(markdown)) {
+            return imageBlock;
+        }
+        int end = imageBlock.lastIndexOf("[ImageEnd]");
+        if (end < 0) {
+            return imageBlock;
+        }
+        int bodyStart = "[Image]".length();
+        if (imageBlock.startsWith("[Image](")) {
+            int destinationEnd = imageBlock.indexOf(')', bodyStart);
+            if (destinationEnd >= 0 && destinationEnd < end) {
+                bodyStart = destinationEnd + 1;
+            }
+        }
+        String separator = imageBlock.substring(bodyStart, end).isBlank() ? "" : "\n\n";
+        return imageBlock.substring(0, end) + separator + markdown + imageBlock.substring(end);
     }
 
     /** Format-specific cleanup after Tika has produced XHTML and before Markdown conversion. */

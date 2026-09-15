@@ -3,6 +3,7 @@ package ai.minum.extract;
 import ai.minum.Mika;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSString;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -18,6 +19,9 @@ import org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.pdmodel.graphics.image.PDInlineImage;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationFreeText;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink;
+import org.apache.pdfbox.pdmodel.interactive.action.PDActionURI;
 import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.apache.pdfbox.pdmodel.interactive.form.PDTextField;
 import org.junit.jupiter.api.Test;
@@ -63,6 +67,28 @@ class PDFExtractTest {
                 .getMarkdown();
 
         assertTrue(markdown.indexOf("left second") < markdown.indexOf("right first"), markdown);
+    }
+
+    @Test
+    void separatesSurvivingSuffixesFromOverlappingTextLayers() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                writeText(content, "Text the first time", 100, 700);
+                writeText(content, "Text the second time", 100, 700);
+            }
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        ExtractResult result = Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig());
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(result.getMarkdown().contains("first time second time"), result.getMarkdown());
+        assertFalse(result.getMarkdown().contains("timesecond"), result.getMarkdown());
     }
 
     @Test
@@ -178,6 +204,136 @@ class PDFExtractTest {
         assertTrue(limited.isError());
         assertTrue(limited.getErrorMessage().contains("Extracted content size limit exceeded"),
                 limited.getErrorMessage());
+    }
+
+    @Test
+    void includesVisibleAnnotationContentsAndSkipsHiddenOnes() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                writeText(content, "Visible page text", 72, 720);
+            }
+            PDAnnotationFreeText visible = new PDAnnotationFreeText();
+            visible.setContents("Review this paragraph");
+            visible.setTitlePopup("Alice");
+            page.getAnnotations().add(visible);
+            PDAnnotationFreeText utf8 = new PDAnnotationFreeText();
+            byte[] utf8Text = "ไฮไลต์ข้อความ".getBytes(StandardCharsets.UTF_8);
+            byte[] utf8WithBom = new byte[utf8Text.length + 3];
+            System.arraycopy(new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF}, 0, utf8WithBom, 0, 3);
+            System.arraycopy(utf8Text, 0, utf8WithBom, 3, utf8Text.length);
+            utf8.getCOSObject().setItem(COSName.CONTENTS, new COSString(utf8WithBom));
+            page.getAnnotations().add(utf8);
+            PDAnnotationFreeText hidden = new PDAnnotationFreeText();
+            hidden.setContents("private draft note");
+            hidden.setHidden(true);
+            page.getAnnotations().add(hidden);
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        ExtractResult result = Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig());
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(result.getMarkdown().contains("### Annotations"), result.getMarkdown());
+        assertTrue(result.getMarkdown().contains("**Alice:** Review this paragraph"), result.getMarkdown());
+        assertTrue(result.getMarkdown().contains("ไฮไลต์ข้อความ"), result.getMarkdown());
+        assertFalse(result.getMarkdown().contains("ï»¿"), result.getMarkdown());
+        assertFalse(result.getMarkdown().contains("private draft note"), result.getMarkdown());
+    }
+
+    @Test
+    void boundsUntrustedAnnotationMetadataBeforeAddingItToThePage() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            PDAnnotationFreeText annotation = new PDAnnotationFreeText();
+            annotation.setContents("批注".repeat(20_000));
+            page.getAnnotations().add(annotation);
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        ExtractResult result = Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig());
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(result.getMarkdown().startsWith("### Annotations\n\n- 批注"), result.getMarkdown());
+        assertTrue(result.getMarkdown().endsWith("…"), result.getMarkdown());
+        assertTrue(result.getMarkdown().length() < 33_000, Integer.toString(result.getMarkdown().length()));
+    }
+
+    @Test
+    void includesSafeAnnotationLinksOnceAndRejectsExecutableUris() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            for (int index = 0; index < 2; index++) {
+                PDAnnotationLink link = new PDAnnotationLink();
+                PDActionURI action = new PDActionURI();
+                action.setURI("www.example.com/forms");
+                link.setAction(action);
+                page.getAnnotations().add(link);
+            }
+            PDAnnotationLink unsafe = new PDAnnotationLink();
+            PDActionURI unsafeAction = new PDActionURI();
+            unsafeAction.setURI("javascript:alert(1)");
+            unsafe.setAction(unsafeAction);
+            page.getAnnotations().add(unsafe);
+            PDAnnotationLink malformed = new PDAnnotationLink();
+            PDActionURI malformedAction = new PDActionURI();
+            malformedAction.setURI("https://portfolio.13");
+            malformed.setAction(malformedAction);
+            page.getAnnotations().add(malformed);
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        ExtractResult result = Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig());
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertEquals("### Annotations\n\n- <https://www.example.com/forms>", result.getMarkdown());
+        assertFalse(result.getMarkdown().contains("javascript"), result.getMarkdown());
+    }
+
+    @Test
+    void includesTaggedPdfAlternativeDescriptions() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            PDStructureTreeRoot root = new PDStructureTreeRoot();
+            document.getDocumentCatalog().setStructureTreeRoot(root);
+            PDStructureElement documentElement = new PDStructureElement(
+                    StandardStructureTypes.DOCUMENT, root);
+            root.appendKid(documentElement);
+            PDStructureElement figure = new PDStructureElement(StandardStructureTypes.Figure, documentElement);
+            figure.setPage(page);
+            figure.setAlternateDescription("A red line rising from left to right");
+            figure.appendKid(5);
+            documentElement.appendKid(figure);
+            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                content.beginMarkedContent(COSName.getPDFName("Figure"), 5);
+                writeText(content, "Quarterly trend", 72, 720);
+                content.endMarkedContent();
+            }
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        ExtractResult result = Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig());
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(result.getMarkdown().contains("### Accessibility descriptions"), result.getMarkdown());
+        assertTrue(result.getMarkdown().contains("A red line rising from left to right"),
+                result.getMarkdown());
     }
 
     @Test

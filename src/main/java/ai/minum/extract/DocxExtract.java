@@ -21,6 +21,12 @@ public class DocxExtract extends TikaExtractor {
     @Override
     protected void cleanDocument(Document document, Metadata metadata, Path repeatableSource) {
         try {
+            DocxComments.restore(document, repeatableSource);
+        } catch (Exception e) {
+            // Keep Tika's flattened comment text if OOXML relationship/range data is malformed.
+            logger.warn("Failed to restore DOCX comment structure", e);
+        }
+        try {
             DocxTableLayout.restore(document, repeatableSource);
         } catch (Exception e) {
             // Tika has already produced usable body text. A package-specific layout problem must not

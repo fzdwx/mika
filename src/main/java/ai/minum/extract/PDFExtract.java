@@ -5,21 +5,26 @@ import org.apache.pdfbox.contentstream.PDFGraphicsStreamEngine;
 import org.apache.pdfbox.cos.COSBase;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSString;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDMarkedContentReference;
+import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDObjectReference;
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement;
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureNode;
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImage;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotation;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink;
+import org.apache.pdfbox.pdmodel.interactive.action.PDActionURI;
 import org.apache.pdfbox.pdmodel.interactive.form.PDButton;
 import org.apache.pdfbox.pdmodel.interactive.form.PDChoice;
 import org.apache.pdfbox.pdmodel.interactive.form.PDField;
 import org.apache.pdfbox.pdmodel.interactive.form.PDNonTerminalField;
 import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.pdfbox.text.TextPosition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,6 +33,8 @@ import java.awt.geom.Point2D;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -39,6 +46,13 @@ import java.util.Set;
 import java.util.StringJoiner;
 
 public class PDFExtract implements Extractor {
+    private static final int MAX_ANNOTATIONS_PER_PAGE = 1024;
+    private static final int MAX_ANNOTATION_FIELD_CHARACTERS = 32 * 1024;
+    private static final int MAX_ANNOTATION_URI_CHARACTERS = 4096;
+    private static final int MAX_ANNOTATION_TOTAL_CHARACTERS = 1024 * 1024;
+    private static final int MAX_ACCESSIBILITY_DESCRIPTIONS_PER_PAGE = 1024;
+    private static final int MAX_ACCESSIBILITY_DESCRIPTION_CHARACTERS = 32 * 1024;
+    private static final int MAX_ACCESSIBILITY_TOTAL_CHARACTERS = 1024 * 1024;
     private static final Logger logger = LoggerFactory.getLogger(PDFExtract.class);
 
     @Override
@@ -50,10 +64,10 @@ public class PDFExtract implements Extractor {
     public ExtractResult doExtract(ExtractConfig config, InputStream stream) throws Exception {
         ExtractResult result = ExtractResult.of();
         try (PDDocument doc = Loader.loadPDF(stream.readAllBytes())) {
-            Map<COSDictionary, Map<Integer, String>> structureActualText = structureActualText(doc);
+            StructureContent structureContent = structureContent(doc);
             Map<Integer, List<FormValue>> formValues = formValues(doc);
             for (int i = 0; i < doc.getNumberOfPages(); i++) {
-                Map<Integer, String> pageActualText = structureActualText.getOrDefault(
+                Map<Integer, String> pageActualText = structureContent.actualText().getOrDefault(
                         doc.getPage(i).getCOSObject(), Map.of());
                 // Keep content-stream order first. Tagged and multi-column PDFs commonly encode
                 // their intended reading order there, while coordinate sorting interleaves columns.
@@ -75,6 +89,22 @@ public class PDFExtract implements Extractor {
                         content.append("\n\n");
                     }
                     content.append(pageFormValues);
+                }
+                String pageAnnotations = annotationsMarkdown(doc.getPage(i), text);
+                if (!pageAnnotations.isBlank()) {
+                    if (!content.isEmpty()) {
+                        content.append("\n\n");
+                    }
+                    content.append(pageAnnotations);
+                }
+                String pageAlternatives = accessibilityDescriptionsMarkdown(
+                        structureContent.alternativeText().getOrDefault(
+                                doc.getPage(i).getCOSObject(), List.of()), text);
+                if (!pageAlternatives.isBlank()) {
+                    if (!content.isEmpty()) {
+                        content.append("\n\n");
+                    }
+                    content.append(pageAlternatives);
                 }
                 PageImages images = new PageImages(doc.getPage(i));
                 images.processPage(doc.getPage(i));
@@ -263,6 +293,202 @@ public class PDFExtract implements Extractor {
     private record FormValue(String name, String value) {
     }
 
+    private static String annotationsMarkdown(PDPage page, String pageText) {
+        List<String> annotations = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        String searchablePageText = searchableText(pageText);
+        int totalCharacters = 0;
+        int inspectedAnnotations = 0;
+        try {
+            for (PDAnnotation annotation : page.getAnnotations()) {
+                if (inspectedAnnotations++ >= MAX_ANNOTATIONS_PER_PAGE) {
+                    break;
+                }
+                if (annotation.isHidden() || annotation.isInvisible() || annotation.isNoView()
+                        || "Widget".equals(annotation.getSubtype())
+                        || "Popup".equals(annotation.getSubtype())) {
+                    continue;
+                }
+                String body = limitText(normalizeFormText(
+                        pdfString(annotation.getCOSObject(), COSName.CONTENTS)),
+                        MAX_ANNOTATION_FIELD_CHARACTERS);
+                String searchableBody = searchableText(body);
+                if (searchableBody.isBlank() || searchablePageText.contains(searchableBody)) {
+                    body = "";
+                }
+                String author = limitText(normalizeFormText(
+                        pdfString(annotation.getCOSObject(), COSName.T)).replace('\n', ' '),
+                        MAX_ANNOTATION_FIELD_CHARACTERS);
+                String subject = limitText(normalizeFormText(
+                        pdfString(annotation.getCOSObject(), COSName.SUBJ)).replace('\n', ' '),
+                        MAX_ANNOTATION_FIELD_CHARACTERS);
+                String uri = annotation instanceof PDAnnotationLink link && link.getAction() instanceof PDActionURI action
+                        ? safeAnnotationUri(action.getURI()) : "";
+                String uriWithoutScheme = uri.replaceFirst("(?i)^(?:https?://|mailto:)", "");
+                if (!uri.isBlank() && searchablePageText.contains(searchableText(uriWithoutScheme))) {
+                    uri = "";
+                }
+                if (body.isBlank() && subject.isBlank() && uri.isBlank()) {
+                    continue;
+                }
+                String signature = searchableText(author + " " + subject + " " + body + " " + uri);
+                if (signature.isBlank() || !seen.add(signature)) {
+                    continue;
+                }
+                String label = String.join(" — ", List.of(author, subject).stream()
+                        .filter(value -> !value.isBlank()).toList());
+                StringBuilder item = new StringBuilder("- ");
+                if (!label.isBlank()) {
+                    item.append("**").append(Markdown.fromText(label)).append(":**");
+                }
+                if (!body.isBlank()) {
+                    if (!label.isBlank()) {
+                        item.append(' ');
+                    }
+                    item.append(Markdown.fromText(body).replace("\n", "\n  "));
+                }
+                if (!uri.isBlank()) {
+                    if (!label.isBlank() || !body.isBlank()) {
+                        item.append(' ');
+                    }
+                    item.append('<').append(uri).append('>');
+                }
+                String rendered = item.toString();
+                if (totalCharacters + rendered.length() > MAX_ANNOTATION_TOTAL_CHARACTERS) {
+                    break;
+                }
+                annotations.add(rendered);
+                totalCharacters += rendered.length();
+            }
+        } catch (IOException | RuntimeException malformedAnnotations) {
+            logger.warn("Cannot extract all PDF annotations", malformedAnnotations);
+        }
+        return annotations.isEmpty() ? ""
+                : "### Annotations\n\n" + String.join("\n", annotations);
+    }
+
+    private static String accessibilityDescriptionsMarkdown(List<String> descriptions, String pageText) {
+        if (descriptions.isEmpty()) {
+            return "";
+        }
+        String searchablePageText = searchableText(pageText);
+        List<String> values = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        int totalCharacters = 0;
+        int inspectedDescriptions = 0;
+        for (String description : descriptions) {
+            if (inspectedDescriptions++ >= MAX_ACCESSIBILITY_DESCRIPTIONS_PER_PAGE) {
+                break;
+            }
+            String normalized = limitText(normalizeFormText(description),
+                    MAX_ACCESSIBILITY_DESCRIPTION_CHARACTERS);
+            String searchable = searchableText(normalized);
+            if (!normalized.isBlank() && !searchable.isBlank() && !searchablePageText.contains(searchable)
+                    && seen.add(searchable)) {
+                String rendered = "- " + Markdown.fromText(normalized).replace("\n", "\n  ");
+                if (totalCharacters + rendered.length() > MAX_ACCESSIBILITY_TOTAL_CHARACTERS) {
+                    break;
+                }
+                values.add(rendered);
+                totalCharacters += rendered.length();
+            }
+        }
+        return values.isEmpty() ? ""
+                : "### Accessibility descriptions\n\n" + String.join("\n", values);
+    }
+
+    private static String searchableText(String text) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+        StringBuilder normalized = new StringBuilder(text.length());
+        for (int offset = 0; offset < text.length();) {
+            int codePoint = text.codePointAt(offset);
+            offset += Character.charCount(codePoint);
+            if (Character.isLetterOrDigit(codePoint)) {
+                normalized.appendCodePoint(Character.toLowerCase(codePoint));
+            }
+        }
+        return normalized.toString();
+    }
+
+    private static String pdfString(COSDictionary dictionary, COSName key) {
+        COSBase value = dictionary.getDictionaryObject(key);
+        if (!(value instanceof COSString string)) {
+            return null;
+        }
+        byte[] bytes = string.getBytes();
+        // PDF 2.0 permits UTF-8 text strings with an EF BB BF byte-order marker. PDFBox 3.0.4
+        // decodes these annotation strings as PDFDocEncoding, producing mojibake.
+        if (bytes.length >= 3 && bytes[0] == (byte) 0xEF && bytes[1] == (byte) 0xBB
+                && bytes[2] == (byte) 0xBF) {
+            return new String(bytes, 3, bytes.length - 3, StandardCharsets.UTF_8);
+        }
+        return string.getString();
+    }
+
+    private static String safeAnnotationUri(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String uri = value.strip();
+        if (uri.length() > MAX_ANNOTATION_URI_CHARACTERS) {
+            return "";
+        }
+        for (int offset = 0; offset < uri.length();) {
+            int codePoint = uri.codePointAt(offset);
+            offset += Character.charCount(codePoint);
+            if (Character.isISOControl(codePoint) || Character.isWhitespace(codePoint)
+                    || codePoint == '<' || codePoint == '>') {
+                return "";
+            }
+        }
+        if (uri.regionMatches(true, 0, "www.", 0, 4)) {
+            uri = "https://" + uri;
+        }
+        try {
+            URI parsed = URI.create(uri);
+            String scheme = parsed.getScheme();
+            if (scheme == null || !(scheme.equalsIgnoreCase("http")
+                    || scheme.equalsIgnoreCase("https") || scheme.equalsIgnoreCase("mailto"))) {
+                return "";
+            }
+            if ((scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))
+                    && !isPlausibleWebHost(parsed.getHost())) {
+                return "";
+            }
+            if (scheme.equalsIgnoreCase("mailto")
+                    && !parsed.getSchemeSpecificPart().matches("[^@]+@[^@]+\\.[A-Za-z]{2,63}")) {
+                return "";
+            }
+            return uri;
+        } catch (IllegalArgumentException invalidUri) {
+            return "";
+        }
+    }
+
+    private static boolean isPlausibleWebHost(String host) {
+        if (host == null || host.isBlank()) {
+            return false;
+        }
+        if (host.startsWith("[") && host.endsWith("]")) {
+            return true;
+        }
+        if (host.matches("(?:\\d{1,3}\\.){3}\\d{1,3}")) {
+            return true;
+        }
+        int lastDot = host.lastIndexOf('.');
+        return lastDot > 0 && host.substring(lastDot + 1).matches("[A-Za-z]{2,63}");
+    }
+
+    private static String limitText(String value, int maxCharacters) {
+        if (value == null || value.isEmpty() || value.codePointCount(0, value.length()) <= maxCharacters) {
+            return value == null ? "" : value;
+        }
+        int end = value.offsetByCodePoints(0, maxCharacters - 1);
+        return value.substring(0, end).stripTrailing() + "…";
+    }
+
     private static String extractPageText(PDDocument document, int pageIndex, boolean sortByPosition,
                                           Map<Integer, String> structureActualText) throws IOException {
         PDFTextStripper reader = new StructureActualTextStripper(structureActualText);
@@ -376,50 +602,70 @@ public class PDFExtract implements Extractor {
         return lines;
     }
 
-    private static Map<COSDictionary, Map<Integer, String>> structureActualText(PDDocument document) {
+    private static StructureContent structureContent(PDDocument document) {
         PDStructureTreeRoot root = document.getDocumentCatalog().getStructureTreeRoot();
         if (root == null) {
-            return Map.of();
+            return StructureContent.empty();
         }
-        Map<COSDictionary, Map<Integer, String>> result = new IdentityHashMap<>();
+        Map<COSDictionary, Map<Integer, String>> actualText = new IdentityHashMap<>();
+        Map<COSDictionary, List<String>> alternativeText = new IdentityHashMap<>();
         Set<COSDictionary> visited = Collections.newSetFromMap(new IdentityHashMap<>());
         try {
-            collectActualText(root, null, null, result, visited);
-            return result;
+            collectStructureContent(root, null, null, null, actualText, alternativeText, visited);
+            return new StructureContent(actualText, alternativeText);
         } catch (RuntimeException malformedStructure) {
             // A malformed optional structure tree must not prevent extraction of the page streams.
-            logger.warn("Ignore malformed PDF structure tree while reading ActualText", malformedStructure);
-            return Map.of();
+            logger.warn("Ignore malformed PDF structure tree while reading replacement text", malformedStructure);
+            return StructureContent.empty();
         }
     }
 
-    private static void collectActualText(PDStructureNode node, PDPage inheritedPage,
-                                          ActualTextGroup inheritedGroup,
-                                          Map<COSDictionary, Map<Integer, String>> result,
-                                          Set<COSDictionary> visited) {
+    private static void collectStructureContent(PDStructureNode node, PDPage inheritedPage,
+                                                ActualTextGroup inheritedActualText,
+                                                AlternativeTextGroup inheritedAlternativeText,
+                                                Map<COSDictionary, Map<Integer, String>> actualText,
+                                                Map<COSDictionary, List<String>> alternativeText,
+                                                Set<COSDictionary> visited) {
         if (!visited.add(node.getCOSObject())) {
             return;
         }
         PDPage page = inheritedPage;
-        ActualTextGroup group = inheritedGroup;
+        ActualTextGroup actualTextGroup = inheritedActualText;
+        AlternativeTextGroup alternativeTextGroup = inheritedAlternativeText;
         if (node instanceof PDStructureElement element) {
             if (element.getPage() != null) {
                 page = element.getPage();
             }
             if (element.getActualText() != null) {
-                group = new ActualTextGroup(element.getActualText());
+                actualTextGroup = new ActualTextGroup(element.getActualText());
+            }
+            if (isAlternativeDescriptionElement(element) && element.getAlternateDescription() != null) {
+                alternativeTextGroup = new AlternativeTextGroup(element.getAlternateDescription());
+            }
+            if (page != null) {
+                addAlternativeText(alternativeText, page, alternativeTextGroup);
             }
         }
         for (Object kid : node.getKids()) {
             if (kid instanceof PDStructureNode child) {
-                collectActualText(child, page, group, result, visited);
+                collectStructureContent(child, page, actualTextGroup, alternativeTextGroup,
+                        actualText, alternativeText, visited);
             } else if (kid instanceof Integer mcid) {
-                addActualText(result, page, mcid, group);
+                addActualText(actualText, page, mcid, actualTextGroup);
+                addAlternativeText(alternativeText, page, alternativeTextGroup);
             } else if (kid instanceof PDMarkedContentReference reference) {
                 PDPage referencePage = reference.getPage() == null ? page : reference.getPage();
-                addActualText(result, referencePage, reference.getMCID(), group);
+                addActualText(actualText, referencePage, reference.getMCID(), actualTextGroup);
+                addAlternativeText(alternativeText, referencePage, alternativeTextGroup);
+            } else if (kid instanceof PDObjectReference reference) {
+                PDPage referencePage = reference.getPage() == null ? page : reference.getPage();
+                addAlternativeText(alternativeText, referencePage, alternativeTextGroup);
             }
         }
+    }
+
+    private static boolean isAlternativeDescriptionElement(PDStructureElement element) {
+        return "Figure".equals(element.getStructureType()) || "Formula".equals(element.getStructureType());
     }
 
     private static void addActualText(Map<COSDictionary, Map<Integer, String>> result, PDPage page,
@@ -451,6 +697,44 @@ public class PDFExtract implements Extractor {
         }
     }
 
+    private static void addAlternativeText(Map<COSDictionary, List<String>> result, PDPage page,
+                                           AlternativeTextGroup group) {
+        if (page == null || group == null) {
+            return;
+        }
+        String text = group.take();
+        if (!text.isBlank()) {
+            List<String> values = result.computeIfAbsent(page.getCOSObject(), ignored -> new ArrayList<>());
+            if (values.size() < MAX_ACCESSIBILITY_DESCRIPTIONS_PER_PAGE) {
+                values.add(text);
+            }
+        }
+    }
+
+    private static final class AlternativeTextGroup {
+        private final String text;
+        private boolean emitted;
+
+        private AlternativeTextGroup(String text) {
+            this.text = text;
+        }
+
+        private String take() {
+            if (emitted) {
+                return "";
+            }
+            emitted = true;
+            return text;
+        }
+    }
+
+    private record StructureContent(Map<COSDictionary, Map<Integer, String>> actualText,
+                                    Map<COSDictionary, List<String>> alternativeText) {
+        private static StructureContent empty() {
+            return new StructureContent(Map.of(), Map.of());
+        }
+    }
+
     /** Adds /ActualText stored on structure elements to PDFBox's marked-content handling. */
     private static final class StructureActualTextStripper extends PDFTextStripper {
         private final Map<Integer, String> structureActualText;
@@ -470,6 +754,52 @@ public class PDFExtract implements Extractor {
                 }
             }
             super.beginMarkedContentSequence(tag, effectiveProperties);
+        }
+
+        @Override
+        protected void writeString(String text, List<TextPosition> textPositions) throws IOException {
+            super.writeString(separateOverlappingRuns(text, textPositions));
+        }
+
+        private static String separateOverlappingRuns(String text, List<TextPosition> positions) {
+            if (text.isBlank() || positions.size() < 2) {
+                return text;
+            }
+            StringBuilder repaired = new StringBuilder(text.length() + 8);
+            int textOffset = 0;
+            TextPosition previous = null;
+            for (TextPosition current : positions) {
+                String glyph = current.getUnicode();
+                if (glyph == null || glyph.isEmpty() || !text.startsWith(glyph, textOffset)) {
+                    // Bidi normalization and /ActualText can intentionally make the logical string
+                    // differ from the glyph sequence. Coordinate-based rewriting is unsafe there.
+                    return text;
+                }
+                if (previous != null && sameBaseline(previous, current)
+                        && isWordCharacter(previous.getUnicode()) && isWordCharacter(glyph)
+                        && previous.getXDirAdj() - current.getXDirAdj()
+                                > Math.max(previous.getWidthDirAdj(), current.getWidthDirAdj()) * 2
+                        && !repaired.isEmpty() && !Character.isWhitespace(repaired.charAt(repaired.length() - 1))) {
+                    repaired.append(' ');
+                }
+                repaired.append(glyph);
+                textOffset += glyph.length();
+                previous = current;
+            }
+            return textOffset == text.length() ? repaired.toString() : text;
+        }
+
+        private static boolean sameBaseline(TextPosition left, TextPosition right) {
+            return Math.abs(left.getYDirAdj() - right.getYDirAdj())
+                    <= Math.max(left.getHeightDir(), right.getHeightDir()) * 0.25f;
+        }
+
+        private static boolean isWordCharacter(String value) {
+            if (value == null || value.isEmpty()) {
+                return false;
+            }
+            int codePoint = value.codePointBefore(value.length());
+            return Character.isLetterOrDigit(codePoint);
         }
     }
 

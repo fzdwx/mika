@@ -42,6 +42,42 @@ class OfficeMarkdownTest {
         }
     }
 
+    /** LibreOffice sw/qa/extras/ooxmlexport/data/CommentReply.docx (MPL-2.0). */
+    @Test
+    void docxCommentsKeepAuthorAnchorAndReplyHierarchy() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/libreoffice-comment-reply.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            String markdown = result.getMarkdown();
+            assertTrue(markdown.startsWith("text\n\n### Comments"), markdown);
+            assertTrue(markdown.contains("**Egor** on “text” (2018-10-22T17:50:00Z): Parent"), markdown);
+            assertTrue(markdown.contains("**Egor** on “text” (2018-10-22T17:51:00Z): Child"), markdown);
+            assertTrue(markdown.indexOf("Parent") < markdown.indexOf("Child"), markdown);
+            assertEquals(1, count(markdown, "Parent"), markdown);
+            assertEquals(1, count(markdown, "Child"), markdown);
+        }
+    }
+
+    /** Apache POI test-data/document/comment.docx (Apache-2.0). */
+    @Test
+    void commentsOnlyDocxDoesNotPresentReviewTextAsOrdinaryBodyParagraphs() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/poi-comment.docx")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("docx", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            String markdown = result.getMarkdown();
+            assertTrue(markdown.startsWith("### Comments"), markdown);
+            assertTrue(markdown.contains("**Unbekannter Autor** (2019-10-11T05:43:39Z): This is the first line"),
+                    markdown);
+            assertTrue(markdown.contains("This is the second line"), markdown);
+            assertEquals(1, count(markdown, "This is the first line"), markdown);
+            assertEquals(1, count(markdown, "This is the second line"), markdown);
+        }
+    }
+
     /** Apache POI test-data/document/word2.doc (Apache-2.0). */
     @Test
     void extractsLegacyWord2Document() throws Exception {
@@ -96,6 +132,20 @@ class OfficeMarkdownTest {
         }
     }
 
+    /** Apache POI test-data/document/Picture_Alternative_Text.doc (Apache-2.0). */
+    @Test
+    void legacyDocKeepsAuthorProvidedImageDescriptionWithoutOcr() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/poi-picture-alt.doc")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("doc", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertEquals("[Image]This is the alternative text for the picture.[ImageEnd]",
+                    result.getMarkdown());
+            assertTrue(result.hasImage());
+        }
+    }
+
     @Test
     void docxIncludesHtmlAltChunkBodyWithoutSyntheticPartName() throws Exception {
         try (var input = getClass().getResourceAsStream("/documents/tika-altchunk-html.docx")) {
@@ -130,7 +180,7 @@ class OfficeMarkdownTest {
                     result.getMarkdown());
             assertTrue(result.getMarkdown().contains("Red PNG dot; ROW 2"), result.getMarkdown());
             assertEquals(1, uploads.get(), "Repeated MHTML image references share one MIME part");
-            assertEquals(2, count(result.getMarkdown(), "[Image](images/dot.png)[ImageEnd]"),
+            assertEquals(2, count(result.getMarkdown(), "[Image](images/dot.png)Red dot[ImageEnd]"),
                     result.getMarkdown());
             assertFalse(result.getMarkdown().contains("htmlDoc.mht"), result.getMarkdown());
             assertTrue(result.hasTable());
@@ -254,6 +304,26 @@ class OfficeMarkdownTest {
             assertTrue(result.hasImage());
         }
         assertEquals(2, uploads.get(), "The config image budget must reset for each extraction");
+    }
+
+    @Test
+    void docxKeepsMeaningfulImageAlternativeTextWithoutOcrOrUpload() throws Exception {
+        try (XWPFDocument document = new XWPFDocument()) {
+            XWPFRun run = document.createParagraph().createRun();
+            run.addPicture(new ByteArrayInputStream(png()), Document.PICTURE_TYPE_PNG,
+                    "chart.png", Units.toEMU(20), Units.toEMU(20));
+            run.getCTR().getDrawingArray(0).getInlineArray(0).getDocPr()
+                    .setDescr("季度销售额从 100 万元增长到 180 万元");
+            run.getEmbeddedPictures().getFirst().getCTPicture().getNvPicPr().getCNvPr()
+                    .setDescr("季度销售额从 100 万元增长到 180 万元");
+
+            ExtractResult result = extract(document, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertEquals("[Image]季度销售额从 100 万元增长到 180 万元[ImageEnd]",
+                    result.getMarkdown());
+            assertTrue(result.hasImage());
+        }
     }
 
     @Test
@@ -433,6 +503,30 @@ class OfficeMarkdownTest {
         assertFalse(markdown.contains("第一段<br"), markdown);
         assertTrue(markdown.contains("第一段\n\n第二段"), markdown);
         assertTrue(markdown.contains("第二段  \n仍是第二段"), markdown);
+    }
+
+    @Test
+    void extractionWhitespaceDoesNotKeepNonBreakingOrInvisibleCharacters() {
+        assertEquals("first secondthird", Markdown.fromText(
+                "first\u00a0second\u200bthird\u00ad"));
+        assertEquals("first secondthird", Markdown.fromHtml(
+                "<p>first&nbsp;second&#x200b;third&#xad;</p>"));
+    }
+
+    @Test
+    void imageAlternativeTextDropsGeneratedNamesWithoutDiscardingUsefulDescriptions() {
+        assertEquals("", TikaExtractor.meaningfulAlternativeText("Picture 1", "image1.png"));
+        assertEquals("", TikaExtractor.meaningfulAlternativeText("image1.png", "image1.png"));
+        assertEquals("", TikaExtractor.meaningfulAlternativeText(
+                "Logo\n\nDescription automatically generated", "image1.png"));
+        assertEquals("A chart rising from 10 to 20", TikaExtractor.meaningfulAlternativeText(
+                "A chart rising from 10 to 20\nDescription automatically generated", "image1.png"));
+        assertEquals("", TikaExtractor.meaningfulAlternativeText(
+                "https://images.example.com/photo.jpg", "image1.png"));
+        assertEquals("", TikaExtractor.meaningfulAlternativeText("IMG_256", "image1.png"));
+        assertEquals("", TikaExtractor.meaningfulAlternativeText("济南1", "image1.png"));
+        assertEquals("", TikaExtractor.meaningfulAlternativeText(
+                "△图片来源：埃菲社", "image1.png"));
     }
 
     @Test
