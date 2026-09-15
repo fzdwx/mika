@@ -178,19 +178,17 @@ public class PDFExtract implements Extractor {
     private static double fragmentationScore(String text) {
         int lines = nonBlankLineCount(text);
         int shortLines = 0;
-        int characters = 0;
         for (String line : text.split("\\R")) {
             String trimmed = line.strip();
             if (trimmed.isEmpty()) {
                 continue;
             }
             int length = trimmed.codePointCount(0, trimmed.length());
-            characters += length;
             if (length <= 3) {
                 shortLines++;
             }
         }
-        if (lines < 20 || characters >= lines * 8) {
+        if (lines < 20) {
             return 0;
         }
         return (double) shortLines / lines;
@@ -201,7 +199,8 @@ public class PDFExtract implements Extractor {
         int positionLines = nonBlankLineCount(positionOrder);
         return fragmentationScore(positionOrder) < fragmentationScore(contentOrder)
                 && contentLines >= 20
-                && contentLines >= positionLines * 4L;
+                && positionLines > 0
+                && contentLines >= positionLines * 3L;
     }
 
     private static int nonBlankLineCount(String text) {

@@ -78,6 +78,18 @@ public class DocExtract extends TikaExtractor {
                 break;
             }
         }
+
+        // HWPF can expose the PAGE field instruction as a literal footer paragraph followed by
+        // the displayed page number. The instruction is not visible document content.
+        for (var paragraph : document.select("div.footer > p").stream()
+                .filter(candidate -> candidate.text().strip().equalsIgnoreCase("PAGE"))
+                .toList()) {
+            var displayedPage = paragraph.nextElementSibling();
+            paragraph.remove();
+            if (displayedPage != null && displayedPage.text().strip().matches("\\d+")) {
+                displayedPage.remove();
+            }
+        }
     }
 
     private static String cleanLegacyFields(String value) {

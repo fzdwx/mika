@@ -73,6 +73,9 @@ class PDFExtractTest {
     @Test
     void identifiesCharacterWiseExtractionWithoutFlaggingNormalParagraphs() {
         assertTrue(PDFExtract.isFragmentedExtraction("a\np\na\nc\nh\ne\n".repeat(5)));
+        assertTrue(PDFExtract.isFragmentedExtraction(
+                "A normal paragraph with enough text on every line.\n".repeat(10)
+                        + "成\n都\n市\n".repeat(12)));
         assertFalse(PDFExtract.isFragmentedExtraction(
                 "A normal paragraph with enough text on every line.\n".repeat(30)));
     }

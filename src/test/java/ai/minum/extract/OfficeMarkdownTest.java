@@ -9,7 +9,9 @@ import org.apache.poi.xwpf.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
+import org.apache.tika.metadata.Metadata;
 import org.junit.jupiter.api.Test;
+import org.jsoup.Jsoup;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTStyle;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTbl;
 
@@ -338,6 +340,24 @@ class OfficeMarkdownTest {
         assertFalse(markdown.contains("第一段<br"), markdown);
         assertTrue(markdown.contains("第一段\n\n第二段"), markdown);
         assertTrue(markdown.contains("第二段  \n仍是第二段"), markdown);
+    }
+
+    @Test
+    void underlineAndInsertedTextRemainPlainPortableMarkdown() {
+        String markdown = Markdown.fromHtml("<p><u>带下划线</u><ins>修订插入</ins></p>");
+
+        assertEquals("带下划线修订插入", markdown);
+        assertFalse(markdown.contains("++"), markdown);
+    }
+
+    @Test
+    void legacyPageFieldInstructionDoesNotLeakFromFooter() {
+        var document = Jsoup.parse("<div class=footer><p>PAGE</p><p>1</p></div><p>PAGE</p>");
+
+        new DocExtract().cleanDocument(document, new Metadata());
+
+        assertEquals("", document.selectFirst("div.footer").text());
+        assertEquals(1, document.select("body > p:matchesOwn((?i)^PAGE$)").size());
     }
 
     @Test

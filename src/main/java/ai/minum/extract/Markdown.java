@@ -43,6 +43,10 @@ final class Markdown {
                 image.unwrap();
             }
         }
+        // Portable Markdown has no underline or insertion syntax. Flexmark otherwise renders both
+        // as ++text++, which leaks presentation markup into chunks and is not understood by common
+        // Markdown renderers. Keep the visible text and discard only the unsupported decoration.
+        document.select("u, ins").unwrap();
         // Office parsers commonly emit empty paragraphs and trailing breaks as layout artifacts.
         // Paragraph boundaries already become blank lines in Markdown, so retaining these adds noise.
         for (Element paragraph : document.select("p")) {

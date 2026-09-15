@@ -37,7 +37,7 @@ try (var stream = Files.newInputStream(Path.of("操作手册.docx"))) {
 
 `getPages()` 保留原接口。PDF 页号从 `0` 开始，空白页保留；DOC / DOCX / Tika 通用提取现在返回一个完整文档段，页号 `0`，不代表 Word 排版页数。`getMarkdown()` 用空行连接非空段，物理页定位请使用 `getPages()`。
 
-普通表格输出 GFM 管道表格。源表没有表头时添加空表头，保留全部数据行。已经从源格式解析出 `rowspan` / `colspan` 或嵌套关系的复杂表格保留为 Markdown 内的 HTML 表格，因此展示端需支持 GFM 及经过净化的 HTML 表格。
+普通表格输出 GFM 管道表格。源表没有表头时添加空表头，保留全部数据行。已经从源格式解析出 `rowspan` / `colspan` 或嵌套关系的复杂表格保留为 Markdown 内的 HTML 表格，因此展示端需支持 GFM 及经过净化的 HTML 表格。下划线和修订插入没有通用 Markdown 语法，输出时只保留可见文字，不生成 Flexmark 专用的 `++文字++`。
 
 ## 图片与 OCR
 
