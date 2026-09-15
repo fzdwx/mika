@@ -14,11 +14,13 @@ import org.junit.jupiter.api.Test;
 import org.jsoup.Jsoup;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTStyle;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTbl;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.STMerge;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.math.BigInteger;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.List;
@@ -161,6 +163,64 @@ class OfficeMarkdownTest {
             assertTrue(markdown.contains("温度") && markdown.contains("20 °C"), markdown);
             assertTrue(markdown.indexOf("表格之后") > markdown.indexOf("20 °C"), markdown);
             assertTrue(result.hasTable());
+        }
+    }
+
+    @Test
+    void docxRestoresHorizontalAndVerticalMergedCells() throws Exception {
+        try (XWPFDocument document = new XWPFDocument()) {
+            XWPFTable table = document.createTable(3, 3);
+            table.getRow(0).getCell(0).setText("合并标题");
+            table.getRow(0).getCell(0).getCTTc().addNewTcPr().addNewGridSpan()
+                    .setVal(BigInteger.valueOf(2));
+            table.getRow(0).removeCell(1);
+            table.getRow(0).getCell(1).setText("第三列");
+
+            table.getRow(1).getCell(0).setText("纵向分类");
+            table.getRow(1).getCell(0).getCTTc().addNewTcPr().addNewVMerge().setVal(STMerge.RESTART);
+            table.getRow(1).getCell(1).setText("甲");
+            table.getRow(1).getCell(2).setText("1");
+            table.getRow(2).getCell(0).setText("");
+            table.getRow(2).getCell(0).getCTTc().addNewTcPr().addNewVMerge().setVal(STMerge.CONTINUE);
+            table.getRow(2).getCell(1).setText("乙");
+            table.getRow(2).getCell(2).setText("2");
+
+            XWPFTable legacyMerge = document.createTable(1, 3);
+            legacyMerge.getRow(0).getCell(0).setText("旧式横向合并");
+            legacyMerge.getRow(0).getCell(0).getCTTc().addNewTcPr().addNewHMerge().setVal(STMerge.RESTART);
+            legacyMerge.getRow(0).getCell(1).setText("");
+            legacyMerge.getRow(0).getCell(1).getCTTc().addNewTcPr().addNewHMerge().setVal(STMerge.CONTINUE);
+            legacyMerge.getRow(0).getCell(2).setText("末列");
+
+            ExtractResult result = extract(document, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            String markdown = result.getMarkdown();
+            assertTrue(markdown.contains("<table>"), markdown);
+            assertTrue(markdown.contains("colspan=\"2\""), markdown);
+            assertTrue(markdown.contains("rowspan=\"2\""), markdown);
+            assertEquals(1, count(markdown, "纵向分类"), markdown);
+            assertTrue(markdown.contains("甲") && markdown.contains("乙")
+                    && markdown.contains("旧式横向合并") && markdown.contains("末列"), markdown);
+        }
+    }
+
+    @Test
+    void docxLayoutPassDoesNotEnableImageExtraction() throws Exception {
+        try (XWPFDocument document = new XWPFDocument()) {
+            XWPFTable table = document.createTable(1, 2);
+            table.getRow(0).getCell(0).setText("图片旁标题");
+            table.getRow(0).getCell(0).getCTTc().addNewTcPr().addNewGridSpan()
+                    .setVal(BigInteger.valueOf(2));
+            table.getRow(0).removeCell(1);
+            document.createParagraph().createRun().addPicture(new ByteArrayInputStream(png()),
+                    Document.PICTURE_TYPE_PNG, "disabled.png", Units.toEMU(20), Units.toEMU(20));
+
+            ExtractResult result = extract(document, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("colspan=\"2\""), result.getMarkdown());
+            assertFalse(result.getMarkdown().contains("[Image]"), result.getMarkdown());
         }
     }
 

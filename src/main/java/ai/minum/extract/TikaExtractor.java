@@ -37,12 +37,12 @@ import java.util.UUID;
 public class TikaExtractor implements Extractor {
     @Override
     public ExtractResult doExtract(ExtractConfig config, InputStream stream) throws Exception {
-        if (!config.ocr() && !config.uploadImage()) {
+        if (!requiresRepeatableSource() && !config.ocr() && !config.uploadImage()) {
             return parseDocument(config, stream, null);
         }
 
-        // Image positions are known only after Tika has produced XHTML. Keep the source on disk so a
-        // second pass can load just the body-referenced images without caching every package resource.
+        // Keep a bounded source on disk for format-specific structure recovery. Image positions are
+        // known only after Tika has produced XHTML, so image handling also needs this repeatable input.
         Path source = Files.createTempFile("mika-extract-", ".bin");
         try {
             Files.copy(stream, source, StandardCopyOption.REPLACE_EXISTING);
@@ -102,7 +102,7 @@ public class TikaExtractor implements Extractor {
         Metadata metadata = new Metadata();
         parser.parse(stream, handler, metadata, context);
         Document document = Jsoup.parse(xhtml.toString(StandardCharsets.UTF_8));
-        cleanDocument(document, metadata);
+        cleanDocument(document, metadata, repeatableSource);
         result.setHasTable(!document.select("table").isEmpty());
         result.setHasImage(!document.select("img").isEmpty());
 
@@ -118,6 +118,7 @@ public class TikaExtractor implements Extractor {
             }
         }
         Map<String, String> processedImages = repeatableSource == null || referencedImages.isEmpty()
+                || (!config.ocr() && !config.uploadImage())
                 ? Map.of()
                 : processReferencedImages(config, repeatableSource, referencedImages, anonymousImages,
                         result, parser);
@@ -162,6 +163,19 @@ public class TikaExtractor implements Extractor {
 
     /** Format-specific cleanup after Tika has produced XHTML and before Markdown conversion. */
     protected void cleanDocument(Document document, Metadata metadata) {
+    }
+
+    /**
+     * Indicates that a format needs a repeatable source even when image processing is disabled.
+     * The source is still bounded by {@link ExtractConfig#maxExtractInputSize()}.
+     */
+    protected boolean requiresRepeatableSource() {
+        return false;
+    }
+
+    /** Format-specific cleanup that also needs access to the bounded, repeatable source. */
+    protected void cleanDocument(Document document, Metadata metadata, Path repeatableSource) {
+        cleanDocument(document, metadata);
     }
 
     private Map<String, String> processReferencedImages(ExtractConfig config, Path source,
