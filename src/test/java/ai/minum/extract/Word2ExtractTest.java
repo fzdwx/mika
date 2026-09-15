@@ -46,6 +46,16 @@ class Word2ExtractTest {
     }
 
     @Test
+    void keepsSearchableFallbacksForLegacyEquationAndEmbeddedObjectFields() {
+        String markdown = Word2Extract.toMarkdown(
+                "Formula \\u0013EQ x + y \\u0015\\rObject \\u0013EMBED Equation.3 \\u0015"
+                        .replace("\\u0013", "\u0013").replace("\\u0015", "\u0015").replace("\\r", "\r"));
+
+        assertTrue(markdown.contains("x + y"), markdown);
+        assertTrue(markdown.contains("Embedded object: Equation.3"), markdown);
+    }
+
+    @Test
     void convertsWord2CellAndRowMarkersToAGfmTable() {
         String text = "Product Number\r\n\r\u0007\r\nSize\r\n\r\u0007\r\nList Price"
                 + "\r\n\r\u0007\r\n1-6\r\n\r\u0007\r\n7+\r\n\r\u0007\r\u0007"

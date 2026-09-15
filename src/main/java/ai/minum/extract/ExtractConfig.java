@@ -1,6 +1,11 @@
 package ai.minum.extract;
 
 import ai.minum.ocr.DefaultOcr;
+import ai.minum.ocr.Ocr;
+
+import java.util.Arrays;
+import java.util.EnumSet;
+import java.util.Set;
 
 public class ExtractConfig {
 
@@ -12,7 +17,15 @@ public class ExtractConfig {
     // 图像提取最大大小 1MB
     private int imageExtractMaxSize = 1024 * 1024;
     // OCR 实例
-    private DefaultOcr ocr;
+    private Ocr ocr;
+    // The bundled HTTP OCR protocol has been verified with these raster formats. Legacy vector
+    // formats are converted to PNG before OCR while the uploader still receives the original.
+    private Set<ImageResult.Format> ocrImageFormats = ImageResult.Format.defaultOcrFormats();
+
+    private String pdfPassword = "";
+    private byte[] pdfKeyStore;
+    private String pdfKeyStorePassword = "";
+    private String pdfKeyAlias;
 
     // 是否对其他格式使用 Tika 结构提取并转换成 Markdown
     private boolean fallback = true;
@@ -57,6 +70,11 @@ public class ExtractConfig {
         copy.extractImage = extractImage;
         copy.imageExtractMaxSize = imageExtractMaxSize;
         copy.ocr = ocr;
+        copy.ocrImageFormats = EnumSet.copyOf(ocrImageFormats);
+        copy.pdfPassword = pdfPassword;
+        copy.pdfKeyStore = pdfKeyStore == null ? null : Arrays.copyOf(pdfKeyStore, pdfKeyStore.length);
+        copy.pdfKeyStorePassword = pdfKeyStorePassword;
+        copy.pdfKeyAlias = pdfKeyAlias;
         copy.fallback = fallback;
         copy.imageUploader = imageUploader;
         copy.uploadImage = uploadImage;
@@ -133,8 +151,67 @@ public class ExtractConfig {
         return this;
     }
 
-    public DefaultOcr getOcr() {
+    public Ocr getOcr() {
         return ocr;
+    }
+
+    public ExtractConfig ocr(Ocr ocr) {
+        if (ocr == null) {
+            throw new IllegalArgumentException("OCR backend is required");
+        }
+        this.ocr = ocr;
+        this.extractImage = true;
+        return this;
+    }
+
+    /** Declares formats accepted directly by the OCR backend; other formats are rasterized to PNG. */
+    public ExtractConfig ocrImageFormats(Set<ImageResult.Format> formats) {
+        if (formats == null || formats.isEmpty()) {
+            throw new IllegalArgumentException("At least one OCR image format is required");
+        }
+        this.ocrImageFormats = EnumSet.copyOf(formats);
+        return this;
+    }
+
+    boolean ocrAccepts(ImageResult.Format format) {
+        return ocrImageFormats.contains(format);
+    }
+
+    public ExtractConfig pdfPassword(String password) {
+        this.pdfPassword = password == null ? "" : password;
+        return this;
+    }
+
+    String pdfPassword() {
+        return pdfPassword;
+    }
+
+    /** Supplies a PKCS#12/JKS key store and optional alias for certificate-encrypted PDFs. */
+    public ExtractConfig pdfCertificate(byte[] keyStore, String alias) {
+        return pdfCertificate(keyStore, "", alias);
+    }
+
+    /** Supplies a PKCS#12/JKS key store, its password, and an optional certificate alias. */
+    public ExtractConfig pdfCertificate(byte[] keyStore, String keyStorePassword, String alias) {
+        if (keyStore == null || keyStore.length == 0) {
+            throw new IllegalArgumentException("PDF certificate key store is required");
+        }
+        this.pdfKeyStore = Arrays.copyOf(keyStore, keyStore.length);
+        this.pdfKeyStorePassword = keyStorePassword == null ? "" : keyStorePassword;
+        this.pdfKeyAlias = alias;
+        return this;
+    }
+
+    byte[] pdfKeyStore() {
+        return pdfKeyStore == null ? null : Arrays.copyOf(pdfKeyStore, pdfKeyStore.length);
+    }
+
+    String pdfKeyAlias() {
+        return pdfKeyAlias;
+    }
+
+    String pdfKeyStorePassword() {
+        return pdfKeyStorePassword;
     }
 
     public int imageExtractMaxSize() {

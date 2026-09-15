@@ -36,6 +36,8 @@ final class Word2Extract {
     private static final char CELL_MARKER = '\ue003';
     private static final char ROW_MARKER = '\ue004';
     private static final Pattern SYMBOL_FIELD = Pattern.compile("(?i)^\\s*SYMBOL\\s+(\\d+)(?:\\s|$)");
+    private static final Pattern EQUATION_FIELD = Pattern.compile("(?is)^\\s*EQ\\s+(.+)$");
+    private static final Pattern EMBED_FIELD = Pattern.compile("(?is)^\\s*EMBED\\s+([^\\s\\\\]+)");
 
     private Word2Extract() {
     }
@@ -67,8 +69,11 @@ final class Word2Extract {
         if (header.hasPictures() && !hasInlinePicture) {
             markdown = markdown.isBlank() ? "[Image][ImageEnd]" : markdown + "\n\n[Image][ImageEnd]";
         }
-        ExtractResult result = ExtractResult.successOfOne(markdown)
-                .setHasTable(markdown.contains("\n| ---"));
+        ExtractResult result = ExtractResult.of().setHasTable(markdown.contains("\n| ---"));
+        long page = 0;
+        for (String section : MarkdownSections.split(markdown)) {
+            result.addPage(page++, section);
+        }
         if (decoded.replacedInvalidBytes()) {
             result.addWarning("Invalid Word 2.0 characters were replaced while decoding " + charset.name());
         }
@@ -446,6 +451,16 @@ final class Word2Extract {
             Matcher symbol = SYMBOL_FIELD.matcher(instruction);
             if (symbol.find() && "183".equals(symbol.group(1))) {
                 return String.valueOf(BULLET_MARKER);
+            }
+            Matcher equation = EQUATION_FIELD.matcher(instruction);
+            if (equation.matches()) {
+                String expression = equation.group(1).replaceAll("\\\\[a-zA-Z]+", " ")
+                        .replaceAll("\\s+", " ").strip();
+                return expression.length() <= 512 ? expression : expression.substring(0, 512);
+            }
+            Matcher embedded = EMBED_FIELD.matcher(instruction);
+            if (embedded.find()) {
+                return "Embedded object: " + embedded.group(1);
             }
             return "";
         }

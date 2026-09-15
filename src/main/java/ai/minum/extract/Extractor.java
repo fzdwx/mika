@@ -1,13 +1,19 @@
 package ai.minum.extract;
 
-import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
+import org.apache.poi.hemf.usermodel.HemfPicture;
 import org.apache.poi.hwpf.usermodel.Picture;
+import org.apache.poi.hwmf.usermodel.HwmfPicture;
 import org.apache.poi.xwpf.usermodel.XWPFPictureData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.imageio.ImageIO;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -24,35 +30,65 @@ public interface Extractor {
     ExtractResult doExtract(ExtractConfig config, InputStream stream) throws Exception;
 
     default String extractImage(ExtractConfig config, ImageResult image, ExtractResult result) throws Exception {
+        return extractImage(config, image, result, true);
+    }
+
+    default String extractImage(ExtractConfig config, ImageResult image, ExtractResult result,
+                                boolean useOcr) throws Exception {
+        return extractImageContent(config, image, result, useOcr).firstPlacement();
+    }
+
+    default ExtractedImage extractImageContent(ExtractConfig config, ImageResult image,
+                                               ExtractResult result, boolean useOcr) throws Exception {
         if (image.length() > config.imageExtractMaxSize()) {
             result.addWarning("Image size limit exceeded; an image was skipped");
-            return "";
+            return new ExtractedImage("", "");
         }
         if (image.length() == 0 || image.getMimeType() == ImageResult.Format.UNKNOWN) {
             result.addWarning("Empty or unsupported image was skipped");
-            return "";
+            return new ExtractedImage("", "");
         }
-        return extractImage(config, image);
+        if (overridesLegacyImageHook()) {
+            return new ExtractedImage(extractImage(config, image), "[Image][ImageEnd]");
+        }
+        return processImage(config, image, useOcr);
+    }
+
+    private boolean overridesLegacyImageHook() {
+        try {
+            return getClass().getMethod("extractImage", ExtractConfig.class, ImageResult.class)
+                    .getDeclaringClass() != Extractor.class;
+        } catch (NoSuchMethodException impossible) {
+            return false;
+        }
     }
 
     default String extractImage(ExtractConfig config, ImageResult result) throws Exception {
+        return processImage(config, result, true).firstPlacement();
+    }
+
+    private ExtractedImage processImage(ExtractConfig config, ImageResult result, boolean useOcr)
+            throws Exception {
         if (result.length() > config.imageExtractMaxSize()) {
-            return "";
+            return new ExtractedImage("", "");
         }
         if (result.getData().length == 0) {
-            return "";
+            return new ExtractedImage("", "");
         }
 
         if (ImageResult.Format.UNKNOWN == result.getMimeType()) {
-            return "";
+            return new ExtractedImage("", "");
         }
 
         String imageContent = "";
-        if (config.ocr()) {
+        if (config.ocr() && useOcr) {
             if (config.getOcr() == null) {
                 throw new IllegalStateException("OCR is enabled but no OCR backend is configured");
             }
-            imageContent = config.getOcr().doOrc(result.getData(), result.getMimeType().getMimeType());
+            ImageResult ocrImage = config.ocrAccepts(result.getMimeType())
+                    ? result : rasterizeForOcr(result);
+            imageContent = config.getOcr().recognize(
+                    ocrImage.getData(), ocrImage.getMimeType().getMimeType());
             if (imageContent == null) {
                 imageContent = "";
             }
@@ -65,7 +101,53 @@ public interface Extractor {
             }
             imageKey = config.imageUploader().upload(result);
         }
-        return Markdown.image(imageKey, imageContent);
+        return new ExtractedImage(Markdown.image(imageKey, imageContent), Markdown.image(imageKey, ""));
+    }
+
+    private static ImageResult rasterizeForOcr(ImageResult source) throws IOException {
+        BufferedImage image = switch (source.getMimeType().rasterization()) {
+            case WMF -> drawMetafile(new HwmfPicture(new ByteArrayInputStream(source.getData())));
+            case EMF -> drawMetafile(new HemfPicture(new ByteArrayInputStream(source.getData())));
+            case IMAGE_IO -> ImageIO.read(new ByteArrayInputStream(source.getData()));
+            case UNSUPPORTED -> null;
+        };
+        if (image == null) {
+            throw new IOException("OCR backend does not accept " + source.getMimeType().getMimeType()
+                    + " and the image cannot be rasterized to PNG");
+        }
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        if (!ImageIO.write(image, "png", bytes)) {
+            throw new IOException("No PNG writer is available for OCR image conversion");
+        }
+        return ImageResult.of(bytes.toByteArray(), ImageResult.Format.PNG);
+    }
+
+    private static BufferedImage drawMetafile(HwmfPicture picture) {
+        return drawMetafile(picture.getBoundsInPoints(), picture::draw);
+    }
+
+    private static BufferedImage drawMetafile(HemfPicture picture) {
+        return drawMetafile(picture.getBoundsInPoints(), picture::draw);
+    }
+
+    private static BufferedImage drawMetafile(
+            Rectangle2D bounds, java.util.function.BiConsumer<Graphics2D, Rectangle2D> renderer) {
+        double widthPoints = Math.max(1, Math.abs(bounds.getWidth()));
+        double heightPoints = Math.max(1, Math.abs(bounds.getHeight()));
+        double scale = Math.min(2.0, Math.min(4096.0 / widthPoints, 4096.0 / heightPoints));
+        int width = Math.max(1, (int) Math.ceil(widthPoints * scale));
+        int height = Math.max(1, (int) Math.ceil(heightPoints * scale));
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D graphics = image.createGraphics();
+        try {
+            graphics.setColor(Color.WHITE);
+            graphics.fillRect(0, 0, width, height);
+            graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            renderer.accept(graphics, new Rectangle2D.Double(0, 0, width, height));
+        } finally {
+            graphics.dispose();
+        }
+        return image;
     }
 
 
@@ -148,17 +230,6 @@ public interface Extractor {
 
     default ImageResult toImageResult(XWPFPictureData pic) {
         byte[] content = pic.getData();
-        InputStream buffin = new ByteArrayInputStream(content);
-        try {
-            BufferedImage image = ImageIO.read(buffin);
-            if (image == null) {
-                return ImageResult.of(new byte[]{}, ImageResult.Format.UNKNOWN);
-            }
-        } catch (IOException e) {
-            return ImageResult.of(new byte[]{}, ImageResult.Format.UNKNOWN);
-        }
-
-
         return ImageResult.of(content, pic.getPictureTypeEnum());
     }
 
@@ -166,5 +237,8 @@ public interface Extractor {
         int max = Math.max(a, b);
         int min = Math.min(a, b);
         return min <= 0 || (double) max / min > 8;
+    }
+
+    record ExtractedImage(String firstPlacement, String repeatedPlacement) {
     }
 }

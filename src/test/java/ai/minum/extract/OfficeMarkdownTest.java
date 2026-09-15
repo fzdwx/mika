@@ -24,10 +24,22 @@ import java.math.BigInteger;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class OfficeMarkdownTest {
+
+    @Test
+    void identifiesFallbackChartPicturesWhenTheChartCacheHasValues() throws Exception {
+        java.nio.file.Path document = java.nio.file.Path.of(
+                getClass().getResource("/documents/poi-chartex.docx").toURI());
+
+        Set<String> images = DocxChartPreviews.withUsableCache(document);
+
+        assertTrue(images.contains("image1.png"), images.toString());
+        assertTrue(images.contains("image2.png"), images.toString());
+    }
     @Test
     void selfClosingTikaInlineTagDoesNotWrapFollowingParagraphs() {
         var document = TikaExtractor.parseTikaXhtml(
@@ -52,6 +64,37 @@ class OfficeMarkdownTest {
             assertTrue(result.getMarkdown().contains("This is a stock chart"), result.getMarkdown());
             assertTrue(result.getMarkdown().contains("this is a box and whisker chart"), result.getMarkdown());
         }
+    }
+
+    @Test
+    void repairsCommonDocxPackageMissingContentTypesWithinSafetyBounds() throws Exception {
+        byte[] source;
+        try (XWPFDocument document = new XWPFDocument();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            document.createParagraph().createRun().setText("修复后正文");
+            document.write(output);
+            source = output.toByteArray();
+        }
+
+        ExtractResult result = Mika.extract("docx",
+                new ByteArrayInputStream(withoutZipEntry(source, "[Content_Types].xml")),
+                ExtractConfig.defaultConfig());
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(result.getMarkdown().contains("修复后正文"), result.getMarkdown());
+        assertTrue(result.getWarnings().stream().anyMatch(warning -> warning.contains("Content_Types")));
+    }
+
+    @Test
+    void rejectsDuplicateEntriesWhileRepairingAMissingContentTypesPart() throws Exception {
+        byte[] bytes;
+        try (var input = getClass().getResourceAsStream("/documents/duplicate-document-part.docx")) {
+            assertNotNull(input);
+            bytes = input.readAllBytes();
+        }
+
+        assertThrows(java.io.IOException.class,
+                () -> DocxPackageRepair.repair(bytes));
     }
 
     /** LibreOffice sw/qa/extras/ooxmlexport/data/CommentReply.docx (MPL-2.0). */
@@ -120,7 +163,23 @@ class OfficeMarkdownTest {
             assertFalse(result.isError(), result.getErrorMessage());
             assertTrue(result.getMarkdown().contains("This is another comment"), result.getMarkdown());
             assertTrue(result.getMarkdown().contains("This is a comment"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("### Comments"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("**Unknown Author**"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("reference context:"), result.getMarkdown());
             assertFalse(result.getMarkdown().contains("�"), result.getMarkdown());
+        }
+    }
+
+    /** Apache POI test-data/document/TableCellMerge.doc (Apache-2.0). */
+    @Test
+    void legacyDocRestoresVerticalMergedTableGeometry() throws Exception {
+        try (var input = getClass().getResourceAsStream("/documents/poi-merged-table.doc")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("doc", input, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("rowspan=\"2\""), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("C"), result.getMarkdown());
         }
     }
 
@@ -624,6 +683,23 @@ class OfficeMarkdownTest {
             document.write(output);
             return Mika.extract("Application/Vnd.Openxmlformats-Officedocument.Wordprocessingml.Document",
                     new ByteArrayInputStream(output.toByteArray()), config);
+        }
+    }
+
+    private static byte[] withoutZipEntry(byte[] archive, String excluded) throws Exception {
+        try (var input = new java.util.zip.ZipInputStream(new ByteArrayInputStream(archive));
+             var bytes = new ByteArrayOutputStream();
+             var output = new java.util.zip.ZipOutputStream(bytes)) {
+            java.util.zip.ZipEntry entry;
+            while ((entry = input.getNextEntry()) != null) {
+                if (!excluded.equals(entry.getName())) {
+                    output.putNextEntry(new java.util.zip.ZipEntry(entry.getName()));
+                    input.transferTo(output);
+                    output.closeEntry();
+                }
+            }
+            output.finish();
+            return bytes.toByteArray();
         }
     }
 

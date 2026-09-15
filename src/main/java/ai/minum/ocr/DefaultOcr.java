@@ -17,7 +17,7 @@ import java.io.InputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
-public class DefaultOcr {
+public class DefaultOcr implements Ocr {
     private String url;
 
     public static DefaultOcr of(String url) {
@@ -105,6 +105,11 @@ public class DefaultOcr {
         };
         return doOrc(new ByteArrayInputStream(pictureData), ContentType.create(normalized),
                 "image." + extension);
+    }
+
+    @Override
+    public String recognize(byte[] image, String mimeType) {
+        return doOrc(image, mimeType);
     }
 }
 

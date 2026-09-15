@@ -25,12 +25,14 @@ import org.apache.pdfbox.pdmodel.interactive.form.PDNonTerminalField;
 import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.pdfbox.text.TextPosition;
+import org.apache.pdfbox.util.Matrix;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.imageio.ImageIO;
 import java.awt.geom.Point2D;
 import java.io.ByteArrayOutputStream;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -63,7 +65,8 @@ public class PDFExtract implements Extractor {
     @Override
     public ExtractResult doExtract(ExtractConfig config, InputStream stream) throws Exception {
         ExtractResult result = ExtractResult.of();
-        try (PDDocument doc = Loader.loadPDF(stream.readAllBytes())) {
+        byte[] pdf = stream.readAllBytes();
+        try (PDDocument doc = loadDocument(pdf, config)) {
             StructureContent structureContent = structureContent(doc);
             Map<Integer, List<FormValue>> formValues = formValues(doc);
             for (int i = 0; i < doc.getNumberOfPages(); i++) {
@@ -71,18 +74,24 @@ public class PDFExtract implements Extractor {
                         doc.getPage(i).getCOSObject(), Map.of());
                 // Keep content-stream order first. Tagged and multi-column PDFs commonly encode
                 // their intended reading order there, while coordinate sorting interleaves columns.
-                String text = extractPageText(doc, i, false, pageActualText);
+                ExtractedPageText pageText = extractPageText(doc, i, false, pageActualText);
+                String text = pageText.text();
                 if (isPredominantlyRightToLeft(text) || isFragmentedExtraction(text)) {
                     // Older Arabic/Hebrew PDFs often store glyphs in visual order. PDFBox's
                     // position sorter applies bidi normalization. It also repairs PDFs whose
                     // transformed text matrices make content-stream extraction nearly character-wise.
-                    String positionSorted = extractPageText(doc, i, true, pageActualText);
+                    ExtractedPageText positionSorted = extractPageText(doc, i, true, pageActualText);
                     if (isPredominantlyRightToLeft(text)
-                            || hasMateriallyBetterLineStructure(text, positionSorted)) {
-                        text = positionSorted;
+                            || hasMateriallyBetterLineStructure(text, positionSorted.text())) {
+                        pageText = positionSorted;
+                        text = pageText.text();
                     }
                 }
-                StringBuilder content = new StringBuilder(Markdown.fromText(text));
+                PageImages images = new PageImages(doc.getPage(i));
+                images.processPage(doc.getPage(i));
+                result.setHasImage(result.hasImage() || !images.placements.isEmpty());
+                List<PositionedImage> positionedImages = processPageImages(config, result, images.placements, i);
+                StringBuilder content = new StringBuilder(markdownWithPositionedImages(pageText, positionedImages));
                 String pageFormValues = formValuesMarkdown(formValues.getOrDefault(i, List.of()));
                 if (!pageFormValues.isBlank()) {
                     if (!content.isEmpty()) {
@@ -106,44 +115,136 @@ public class PDFExtract implements Extractor {
                     }
                     content.append(pageAlternatives);
                 }
-                PageImages images = new PageImages(doc.getPage(i));
-                images.processPage(doc.getPage(i));
-                result.setHasImage(result.hasImage() || !images.images.isEmpty());
-                for (PDImage image : images.images) {
-                    if (!config.ocr() && !config.uploadImage()) {
-                        continue;
-                    }
-                    if (!config.canHandleImage()) {
-                        result.addWarning("Image count limit reached; some images were skipped");
-                        continue;
-                    }
-                    ImageResult imageResult;
-                    try {
-                        if (image instanceof PDImageXObject xObject) {
-                            imageResult = toImageResult(xObject);
-                        } else {
-                            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                            ImageIO.write(image.getImage(), "png", bytes);
-                            imageResult = ImageResult.of(bytes.toByteArray(), ImageResult.Format.PNG);
-                        }
-                    } catch (IOException | RuntimeException e) {
-                        logger.warn("Skip undecodable PDF image: page={}", i + 1, e);
-                        result.addWarning("Cannot decode image on page " + (i + 1));
-                        continue;
-                    }
-                    // Backend failures remain errors, so callers can retry OCR/upload.
-                    String imageContent = extractImage(config, imageResult, result);
-                    if (!imageContent.isBlank()) {
-                        if (!content.isEmpty()) {
-                            content.append("\n\n");
-                        }
-                        content.append(imageContent);
-                    }
-                }
                 result.addPage((long) i, content.toString());
             }
         }
         return result;
+    }
+
+    private static PDDocument loadDocument(byte[] pdf, ExtractConfig config) throws IOException {
+        byte[] keyStore = config.pdfKeyStore();
+        if (keyStore != null) {
+            return Loader.loadPDF(pdf, config.pdfKeyStorePassword(), new ByteArrayInputStream(keyStore),
+                    config.pdfKeyAlias());
+        }
+        return config.pdfPassword().isEmpty()
+                ? Loader.loadPDF(pdf) : Loader.loadPDF(pdf, config.pdfPassword());
+    }
+
+    private List<PositionedImage> processPageImages(ExtractConfig config, ExtractResult result,
+                                                     List<ImagePlacement> placements, int pageIndex)
+            throws Exception {
+        if ((!config.ocr() && !config.uploadImage()) || placements.isEmpty()) {
+            return List.of();
+        }
+        Map<COSBase, ProcessedImage> processed = new IdentityHashMap<>();
+        Set<COSBase> skipped = Collections.newSetFromMap(new IdentityHashMap<>());
+        Set<COSBase> emitted = Collections.newSetFromMap(new IdentityHashMap<>());
+        List<PositionedImage> positioned = new ArrayList<>();
+        for (ImagePlacement placement : placements) {
+            COSBase identity = placement.image().getCOSObject();
+            if (!processed.containsKey(identity) && !skipped.contains(identity)) {
+                if (!config.canHandleImage()) {
+                    result.addWarning("Image count limit reached; some images were skipped");
+                    skipped.add(identity);
+                    continue;
+                }
+                ImageResult imageResult;
+                try {
+                    if (placement.image() instanceof PDImageXObject xObject) {
+                        imageResult = toImageResult(xObject);
+                    } else {
+                        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                        if (!ImageIO.write(placement.image().getImage(), "png", bytes)) {
+                            throw new IOException("No PNG writer is available");
+                        }
+                        imageResult = ImageResult.of(bytes.toByteArray(), ImageResult.Format.PNG);
+                    }
+                } catch (IOException | RuntimeException error) {
+                    logger.warn("Skip undecodable PDF image: page={}", pageIndex + 1, error);
+                    result.addWarning("Cannot decode image on page " + (pageIndex + 1));
+                    skipped.add(identity);
+                    continue;
+                }
+                // Backend failures remain errors, so callers can retry OCR/upload.
+                ExtractedImage content = extractImageContent(config, imageResult, result, true);
+                processed.put(identity, new ProcessedImage(
+                        content.firstPlacement(), content.repeatedPlacement()));
+            }
+            ProcessedImage image = processed.get(identity);
+            if (image != null && !image.firstPlacement().isBlank()) {
+                positioned.add(new PositionedImage(placement.yFromTop(), emitted.add(identity)
+                        ? image.firstPlacement() : image.repeatedPlacement()));
+            }
+        }
+        return positioned;
+    }
+
+    static String markdownWithPositionedImages(ExtractedPageText page, List<PositionedImage> images) {
+        if (images.isEmpty()) {
+            return Markdown.fromText(page.text());
+        }
+        String[] lines = page.text().split("\\n", -1);
+        List<Integer> nonBlankLines = new ArrayList<>();
+        for (int index = 0; index < lines.length; index++) {
+            if (!lines[index].isBlank()) {
+                nonBlankLines.add(index);
+            }
+        }
+        int positionedLineCount = Math.min(nonBlankLines.size(), page.lineYFromTop().size());
+        Map<Integer, List<String>> beforeLine = new LinkedHashMap<>();
+        List<String> trailing = new ArrayList<>();
+        int tokenIndex = 0;
+        Map<String, String> replacements = new LinkedHashMap<>();
+        for (PositionedImage image : images) {
+            String token = "MIKAPDFIMAGETOKEN" + tokenIndex++;
+            replacements.put(token, image.markdown());
+            int target = -1;
+            if (Float.isFinite(image.yFromTop())) {
+                for (int index = 0; index < positionedLineCount; index++) {
+                    if (page.lineYFromTop().get(index) > image.yFromTop()) {
+                        target = nonBlankLines.get(index);
+                        break;
+                    }
+                }
+            }
+            if (target < 0) {
+                trailing.add(token);
+            } else {
+                beforeLine.computeIfAbsent(target, ignored -> new ArrayList<>()).add(token);
+            }
+        }
+        StringBuilder positionedText = new StringBuilder(page.text().length() + images.size() * 32);
+        for (int index = 0; index < lines.length; index++) {
+            List<String> markers = beforeLine.get(index);
+            if (markers != null) {
+                for (String marker : markers) {
+                    appendBlock(positionedText, marker);
+                }
+            }
+            if (!positionedText.isEmpty() && positionedText.charAt(positionedText.length() - 1) != '\n') {
+                positionedText.append('\n');
+            }
+            positionedText.append(lines[index]);
+        }
+        for (String marker : trailing) {
+            appendBlock(positionedText, marker);
+        }
+        String markdown = Markdown.fromText(positionedText.toString());
+        for (Map.Entry<String, String> replacement : replacements.entrySet()) {
+            markdown = markdown.replace(replacement.getKey(), replacement.getValue());
+        }
+        return markdown;
+    }
+
+    private static void appendBlock(StringBuilder content, String block) {
+        if (!content.isEmpty() && content.charAt(content.length() - 1) != '\n') {
+            content.append('\n');
+        }
+        if (content.length() >= 2 && content.charAt(content.length() - 2) != '\n') {
+            content.append('\n');
+        }
+        content.append(block).append("\n\n");
     }
 
     private static Map<Integer, List<FormValue>> formValues(PDDocument document) {
@@ -489,13 +590,16 @@ public class PDFExtract implements Extractor {
         return value.substring(0, end).stripTrailing() + "…";
     }
 
-    private static String extractPageText(PDDocument document, int pageIndex, boolean sortByPosition,
-                                          Map<Integer, String> structureActualText) throws IOException {
-        PDFTextStripper reader = new StructureActualTextStripper(structureActualText);
+    private static ExtractedPageText extractPageText(PDDocument document, int pageIndex,
+                                                     boolean sortByPosition,
+                                                     Map<Integer, String> structureActualText)
+            throws IOException {
+        StructureActualTextStripper reader = new StructureActualTextStripper(structureActualText);
         reader.setSortByPosition(sortByPosition);
         reader.setStartPage(pageIndex + 1);
         reader.setEndPage(pageIndex + 1);
-        return normalizeExtractedUnicode(reader.getText(document));
+        return new ExtractedPageText(normalizeExtractedUnicode(reader.getText(document)),
+                List.copyOf(reader.lineYFromTop));
     }
 
     static String normalizeExtractedUnicode(String text) {
@@ -735,9 +839,17 @@ public class PDFExtract implements Extractor {
         }
     }
 
+    record ExtractedPageText(String text, List<Float> lineYFromTop) {
+    }
+
+    record PositionedImage(float yFromTop, String markdown) {
+    }
+
     /** Adds /ActualText stored on structure elements to PDFBox's marked-content handling. */
     private static final class StructureActualTextStripper extends PDFTextStripper {
         private final Map<Integer, String> structureActualText;
+        private final List<Float> lineYFromTop = new ArrayList<>();
+        private boolean beginningOfLine = true;
 
         private StructureActualTextStripper(Map<Integer, String> structureActualText) {
             this.structureActualText = structureActualText;
@@ -758,7 +870,17 @@ public class PDFExtract implements Extractor {
 
         @Override
         protected void writeString(String text, List<TextPosition> textPositions) throws IOException {
+            if (beginningOfLine && !text.isBlank() && !textPositions.isEmpty()) {
+                lineYFromTop.add(textPositions.getFirst().getYDirAdj());
+                beginningOfLine = false;
+            }
             super.writeString(separateOverlappingRuns(text, textPositions));
+        }
+
+        @Override
+        protected void writeLineSeparator() throws IOException {
+            super.writeLineSeparator();
+            beginningOfLine = true;
         }
 
         private static String separateOverlappingRuns(String text, List<TextPosition> positions) {
@@ -805,8 +927,7 @@ public class PDFExtract implements Extractor {
 
     /** Follows painted Form XObjects and inline images, including nested forms. */
     private static final class PageImages extends PDFGraphicsStreamEngine {
-        private final List<PDImage> images = new ArrayList<>();
-        private final Set<COSBase> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        private final List<ImagePlacement> placements = new ArrayList<>();
         private Point2D currentPoint = new Point2D.Float();
 
         private PageImages(PDPage page) {
@@ -815,9 +936,12 @@ public class PDFExtract implements Extractor {
 
         @Override
         public void drawImage(PDImage image) {
-            if (seen.add(image.getCOSObject())) {
-                images.add(image);
-            }
+            Matrix matrix = getGraphicsState().getCurrentTransformationMatrix();
+            Point2D lowerLeft = matrix.transformPoint(0, 0);
+            Point2D upperRight = matrix.transformPoint(1, 1);
+            float centerY = (float) ((lowerLeft.getY() + upperRight.getY()) / 2.0);
+            float pageTop = getPage().getCropBox().getUpperRightY();
+            placements.add(new ImagePlacement(image, pageTop - centerY));
         }
 
         @Override
@@ -852,5 +976,11 @@ public class PDFExtract implements Extractor {
         @Override public void fillPath(int windingRule) {}
         @Override public void fillAndStrokePath(int windingRule) {}
         @Override public void shadingFill(COSName shadingName) {}
+    }
+
+    private record ImagePlacement(PDImage image, float yFromTop) {
+    }
+
+    private record ProcessedImage(String firstPlacement, String repeatedPlacement) {
     }
 }

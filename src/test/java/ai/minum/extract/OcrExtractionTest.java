@@ -7,14 +7,87 @@ import org.apache.poi.xwpf.usermodel.Document;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.junit.jupiter.api.Test;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class OcrExtractionTest {
+    @Test
+    void pictImageReaderIsAvailable() {
+        assertTrue(ImageIO.getImageReadersByFormatName("PICT").hasNext());
+    }
+
+    @Test
+    void acceptsCustomOcrProviderForHandwritingModels() throws Exception {
+        AtomicReference<String> mimeType = new AtomicReference<>();
+        ExtractResult result = Mika.extract("png", new ByteArrayInputStream(OfficeMarkdownTest.png()),
+                ExtractConfig.defaultConfig().ocr((image, mime) -> {
+                    mimeType.set(mime);
+                    return "handwriting model text";
+                }));
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertEquals("image/png", mimeType.get());
+        assertTrue(result.getMarkdown().contains("handwriting model text"));
+    }
+
+    @Test
+    void rasterizesAnUnsupportedOcrImageFormatToPng() throws Exception {
+        BufferedImage image = new BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB);
+        ByteArrayOutputStream bmp = new ByteArrayOutputStream();
+        assertTrue(ImageIO.write(image, "bmp", bmp));
+        AtomicReference<String> mimeType = new AtomicReference<>();
+        AtomicReference<byte[]> received = new AtomicReference<>();
+
+        ExtractResult result = Mika.extract("bmp", new ByteArrayInputStream(bmp.toByteArray()),
+                ExtractConfig.defaultConfig()
+                        .ocrImageFormats(Set.of(ImageResult.Format.PNG, ImageResult.Format.JPEG))
+                        .ocr((bytes, mime) -> {
+                            mimeType.set(mime);
+                            received.set(bytes);
+                            return "converted";
+                        }));
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertEquals("image/png", mimeType.get());
+        assertArrayEquals(new byte[]{(byte) 0x89, 'P', 'N', 'G'},
+                java.util.Arrays.copyOf(received.get(), 4));
+    }
+
+    @Test
+    void rasterizesRealWmfEmfAndPictSamplesBeforeOcr() throws Exception {
+        for (String fixture : List.of("poi-image.wmf", "poi-image.emf", "twelvemonkeys-1.pict")) {
+            byte[] source;
+            try (var input = getClass().getResourceAsStream("/documents/" + fixture)) {
+                assertNotNull(input);
+                source = input.readAllBytes();
+            }
+            AtomicReference<String> mime = new AtomicReference<>();
+            AtomicReference<byte[]> image = new AtomicReference<>();
+
+            ExtractResult result = Mika.extract(fixture.substring(fixture.lastIndexOf('.') + 1),
+                    new ByteArrayInputStream(source), ExtractConfig.defaultConfig()
+                            .imageExtractMaxSize(1024 * 1024)
+                            .ocr((bytes, type) -> {
+                                image.set(bytes);
+                                mime.set(type);
+                                return "legacy image text";
+                            }));
+
+            assertFalse(result.isError(), fixture + ": " + result.getErrorMessage());
+            assertEquals("image/png", mime.get(), fixture);
+            assertArrayEquals(new byte[]{(byte) 0x89, 'P', 'N', 'G'},
+                    java.util.Arrays.copyOf(image.get(), 4), fixture);
+        }
+    }
     @Test
     void keepsChineseOcrTextAsLiteralMarkdown() throws Exception {
         ExtractResult result = extractWithResponse(200, "{\"code\":0,\"data\":\"中文 *标签*\\n第二行\"}");

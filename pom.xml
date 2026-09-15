@@ -13,6 +13,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <httpclient.version>4.5.14</httpclient.version>
         <hutool.version>5.8.47</hutool.version>
+        <twelvemonkeys.version>3.14.0</twelvemonkeys.version>
     </properties>
 
 
@@ -77,6 +78,16 @@
             <artifactId>jsoup</artifactId>
             <version>1.23.2</version>
         </dependency>
+        <dependency>
+            <groupId>com.twelvemonkeys.imageio</groupId>
+            <artifactId>imageio-pict</artifactId>
+            <version>${twelvemonkeys.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.jai-imageio</groupId>
+            <artifactId>jai-imageio-jpeg2000</artifactId>
+            <version>1.4.0</version>
+        </dependency>
 
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -120,6 +131,8 @@
                                 <includes>
                                     <include>com.vladsch.flexmark:*</include>
                                     <include>org.jsoup:jsoup</include>
+                                    <include>com.twelvemonkeys.*:*</include>
+                                    <include>com.github.jai-imageio:*</include>
                                 </includes>
                             </artifactSet>
                             <relocations>
@@ -131,7 +144,18 @@
                                     <pattern>org.jsoup</pattern>
                                     <shadedPattern>ai.minum.internal.jsoup</shadedPattern>
                                 </relocation>
+                                <relocation>
+                                    <pattern>com.twelvemonkeys</pattern>
+                                    <shadedPattern>ai.minum.internal.twelvemonkeys</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.github.jaiimageio</pattern>
+                                    <shadedPattern>ai.minum.internal.jaiimageio</shadedPattern>
+                                </relocation>
                             </relocations>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
                             <filters>
                                 <filter>
                                     <artifact>*:*</artifact>

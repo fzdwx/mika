@@ -111,7 +111,7 @@ public class TikaExtractor implements Extractor {
         // syntax first so <b/> cannot become an opening tag, serialize the established boundaries
         // as HTML pairs, then apply HTML whitespace and recovery rules to embedded HTML chunks.
         Document document = parseTikaXhtml(xhtml.toString(StandardCharsets.UTF_8));
-        cleanDocument(document, metadata, repeatableSource);
+        cleanDocument(document, metadata, repeatableSource, result);
         result.setHasTable(!document.select("table").isEmpty());
         result.setHasImage(!document.select("img").isEmpty());
 
@@ -126,11 +126,13 @@ public class TikaExtractor implements Extractor {
                 }
             }
         }
+        Set<String> imagesWithStructuredText = repeatableSource == null
+                ? Set.of() : imagesWithStructuredText(repeatableSource);
         Map<String, String> processedImages = repeatableSource == null || referencedImages.isEmpty()
                 || (!config.ocr() && !config.uploadImage())
                 ? Map.of()
                 : processReferencedImages(config, repeatableSource, referencedImages, anonymousImages,
-                        result, parser);
+                        imagesWithStructuredText, result, parser);
 
         Map<String, String> imageMarkers = new LinkedHashMap<>();
         String sourceText = document.text();
@@ -169,7 +171,14 @@ public class TikaExtractor implements Extractor {
         for (Map.Entry<String, String> marker : imageMarkers.entrySet()) {
             markdown = markdown.replace(marker.getKey(), marker.getValue());
         }
-        result.addPage(0L, markdown);
+        if (splitIntoLogicalSections()) {
+            long page = 0;
+            for (String section : MarkdownSections.split(markdown)) {
+                result.addPage(page++, section);
+            }
+        } else {
+            result.addPage(0L, markdown);
+        }
         return result;
     }
 
@@ -239,13 +248,25 @@ public class TikaExtractor implements Extractor {
         return false;
     }
 
-    /** Format-specific cleanup that also needs access to the bounded, repeatable source. */
-    protected void cleanDocument(Document document, Metadata metadata, Path repeatableSource) {
+    /** Word processors use Markdown structure as logical storage sections. */
+    protected boolean splitIntoLogicalSections() {
+        return false;
+    }
+
+    /** Format-specific cleanup that also needs access to the bounded source and extraction result. */
+    protected void cleanDocument(Document document, Metadata metadata, Path repeatableSource,
+                                 ExtractResult result) {
         cleanDocument(document, metadata);
+    }
+
+    /** Images whose package already supplies usable structured text, such as chart caches. */
+    protected Set<String> imagesWithStructuredText(Path repeatableSource) {
+        return Set.of();
     }
 
     private Map<String, String> processReferencedImages(ExtractConfig config, Path source,
                                                          Set<String> referencedImages, Set<String> anonymousImages,
+                                                         Set<String> imagesWithStructuredText,
                                                          ExtractResult result,
                                                          Parser parser) throws Exception {
         long imageLimit = config.getMaxHandleImageCount();
@@ -302,7 +323,8 @@ public class TikaExtractor implements Extractor {
                 ImageResult image = ImageResult.of(bytes,
                         ImageResult.Format.fromMimeType(metadata.get(HttpHeaders.CONTENT_TYPE)));
                 try {
-                    processed.put(name, extractImage(config, image, result));
+                    processed.put(name, extractImage(config, image, result,
+                            !imagesWithStructuredText.contains(name)));
                 } catch (Exception e) {
                     throw new SAXException("Failed to process embedded image " + name, e);
                 }

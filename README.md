@@ -28,14 +28,14 @@ try (var stream = Files.newInputStream(Path.of("操作手册.docx"))) {
 
 | 输入 | 输出与结构 |
 | --- | --- |
-| DOC / DOT / DOCX | Word 6 及以上经 Tika 结构提取后转换为 Markdown，旧 DOC 域只保留实际显示值；Word 2.x 从 FIB 连续文本区或 FastSave piece table 恢复正文、脚注、页眉页脚和批注，并跳过 WordBasic 宏流；保留可解析的标题、段落、链接、表格、嵌套内容、图片位置及作者填写的图片替代描述；DOCX 使用 SAX 解析以兼容新式图表，并从 OOXML 补回合并单元格几何 |
+| DOC / DOT / DOCX | Word 6 及以上经 Tika 结构提取后转换为 Markdown，旧 DOC 域只保留实际显示值；Word 2.x 从 FIB 连续文本区或 FastSave piece table 恢复正文、脚注、页眉页脚和批注，并跳过 WordBasic 宏流；保留可解析的标题、段落、链接、表格、嵌套内容、图片位置及作者填写的图片替代描述；DOCX 使用 SAX 解析以兼容新式图表并补回 OOXML 合并单元格，旧 DOC 从 HWPF 单元格描述恢复可靠的合并几何和批注作者、顺序、正文引用点 |
 | XLS / XLSX、PPT / PPTX 等 Tika 支持的格式 | 从结构化 XHTML 转换为 Markdown，避免只提取一串纯文本 |
-| PDF | 按文档内容流保留阅读顺序；逐字断行或阿拉伯文、希伯来文等页面自动切换坐标排序，并修复重叠文字层幸存后缀的粘词；读取结构树 `/ActualText` 纠正错误字符，并保留 Figure / Formula 的 `/Alt` 描述；按物理页补充批注、安全链接和 AcroForm / XFA 当前表单值，图片上传链接和 OCR 文字附在所在页末尾 |
+| PDF | 按文档内容流保留阅读顺序；逐字断行或阿拉伯文、希伯来文等页面自动切换坐标排序，并修复重叠文字层幸存后缀的粘词；读取结构树 `/ActualText` 纠正错误字符，并保留 Figure / Formula 的 `/Alt` 描述；按物理页补充批注、安全链接和 AcroForm / XFA 当前表单值，图片上传链接和 OCR 文字按绘制坐标穿插到页内相邻文本行 |
 | Markdown | UTF-8 原样读取，仅去除文件开头的 BOM |
 | TXT | 保留换行并转义 Markdown 特殊字符，避免普通文本被误当成标题或强调 |
 | 图片 | 兼容图片块 `[Image](url)OCR文字[ImageEnd]`；可以只上传图片而不开启 OCR |
 
-`getPages()` 保留原接口。PDF 页号从 `0` 开始，空白页保留；DOC / DOCX / Tika 通用提取现在返回一个完整文档段，页号 `0`，不代表 Word 排版页数。`getMarkdown()` 用空行连接非空段，物理页定位请使用 `getPages()`。
+`getPages()` 保留原接口。PDF 页号从 `0` 开始，空白页保留；DOC / DOCX 按 Markdown 标题、显式分页和约 64 KiB 的目标大小生成逻辑段，页号是结构顺序而非 Word 排版页数。为确保 `getMarkdown()` 与未分段结果一致，单个没有段落边界的超长段落不会被强制切开。
 
 普通表格输出紧凑的 GFM 管道表格，不按最长单元格补齐空格和分隔横线。源表没有表头时添加空表头，保留全部数据行。DOCX 的 `gridSpan`、`vMerge` 和旧式 `hMerge` 会转换成 `colspan` / `rowspan`；这类合并表格和嵌套表格保留为 Markdown 内经过净化的 HTML 表格，因为 GFM 管道语法不能表达合并关系。不可见的 Word 书签和空格式节点不会进入 HTML 表格。展示端需同时支持 GFM 和 Markdown 内 HTML。下划线和修订插入没有通用 Markdown 语法，输出时只保留可见文字，不生成 Flexmark 专用的 `++文字++`。
 
@@ -49,6 +49,10 @@ var config = ExtractConfig.defaultConfig()
 
 // 按需启用调用方的 OCR 服务：
 config.ocrUrl("http://your-ocr-service/file/ocr");
+
+// 手写或领域 OCR 可以直接注入实现，并声明后端原生接受的格式：
+config.ocr((bytes, mimeType) -> handwritingOcr(bytes, mimeType))
+      .ocrImageFormats(java.util.Set.of(ImageResult.Format.PNG, ImageResult.Format.JPEG));
 ```
 
 默认关闭图片上传和 OCR；设置 `imageUploader(...)` 会开启上传，设置 `ocrUrl(...)` 会开启 OCR。只设置 `ocr(true)` 而没有 OCR 后端时返回明确错误。Mika 不会自动调用本机 Tesseract。
@@ -63,20 +67,24 @@ Word 图片的作者替代描述不依赖 OCR 或上传。DOCX 从 Tika 的 `alt
 
 PDF 会查找实际绘制的普通图片、嵌套 Form 内的图片和 inline 图片，同页重复使用的同一个图片对象只处理一次。不开启 OCR/上传时不解码图片。JPEG 和 JPEG2000 扫描页保留原始压缩数据，OCR 请求携带对应的 MIME 和扩展名；无法解码的其他图片产生 warning 并保留该页文字。OCR、上传抛出的异常仍使提取失败，供上游重试。
 
-OCR 请求沿用 multipart `file` 协议，响应要求包含字符串 `data`，例如 `{"code":0,"data":"识别正文"}`；空字符串是有效结果。使用 UTF-8 读取响应，非 2xx、空响应或缺少 `data` 会失败。连接超时为 10 秒，读取超时为 120 秒。业务 `code` 的成功值因服务而异，目前未校验，沿用既有协议。OCR 文字按普通文本转义，不推测成标题或表格。
+OCR 请求沿用 multipart `file` 协议，响应要求包含字符串 `data`，例如 `{"code":0,"data":"识别正文"}`；空字符串是有效结果。使用 UTF-8 读取响应，非 2xx、空响应或缺少 `data` 会失败。连接超时为 10 秒，读取超时为 120 秒。业务 `code` 的成功值因服务而异，目前未校验，沿用既有协议。OCR 文字按普通文本转义，不推测成标题或表格。内置 HTTP 后端默认直传 JPEG、JP2、BMP、PNG、TIFF、GIF 和 WebP；WMF、EMF、PICT 以及调用方声明不接受的 JP2 会在 JVM 内有界栅格化为 PNG。原始图片仍交给 `ImageUploader`，避免改变已有存储 key 和文件类型。
+
+DOCX 的 `AlternateContent` 若同时包含图表结构和回退预览图，且图表缓存已有可搜索的类别或数值，Mika 会保留预览图上传标记并跳过该预览图的 OCR；普通图片不会再因为文字碰巧出现在文档其他位置而删除 OCR 结果。
+
+密码 PDF 使用 `pdfPassword(...)`。证书加密 PDF 使用 `pdfCertificate(keyStoreBytes, keyStorePassword, alias)`，支持 PDFBox 接受的 PKCS#12/JKS 私钥库；没有密码的私钥库也可继续使用二参数重载。解密失败保持明确错误，不会把公开元数据当正文成功返回。
 
 ## 迁移与限制
 
 - 正文统一为 Markdown，同时保留旧的 `[Image]...[ImageEnd]` 图片边界，兼容现有下游解析器。
-- DOC / DOCX 原有的段落序号不再作为 `getPages()` 的分段方式；调用方应按 Markdown 结构分块。
+- DOC / DOCX 使用 Markdown 结构生成逻辑页，调用方应保留 `ExtractPage.page`；同一逻辑页超过存储上限时才继续分块。
 - `mvn package` 生成可直接供 `data-extract/lib` 使用的 shaded JAR；只内嵌并重定位新增的 Flexmark、Jsoup 运行时，Tika、POI、HTTP 和日志依赖仍由应用提供。
 - `data-extract` 应在存储层保留 Markdown 空行和图片块边界。
 - `hasImage()` 表示存在图片，不代表已识别所有图片。`hasTable()` 表示解析器识别到了表格；PDF 的 Form XObject 不再被误判为表格，PDF 表格结构仍需版面识别。
 - PDF 的 AcroForm / XFA 当前值以 `### Form fields` 下的 Markdown 列表附在控件所属物理页；选择框优先输出显示值，关闭状态、签名二进制和控制字符不会污染正文。
 - PDF 的可见批注以 `### Annotations` 附在所属物理页；保留作者、主题、正文和经过协议、主机校验的 HTTP(S) / mailto 链接，Widget 与 Popup 不重复输出。PDF 2.0 带 UTF-8 BOM 的批注字符串会按 UTF-8 解码；单页条数、字段、URI 和总字符都有边界，异常元数据不会无限挤占正文。
 - Tagged PDF 的 Figure / Formula 替代描述以 `### Accessibility descriptions` 附在所属物理页；`/ActualText` 仍只用于文本替换，两种语义不会混用。替代描述也按单页条数、单项和总字符限制资源。
-- PDF 内容流正确的多栏文档会保留阅读顺序；内容流本身错误时仍需版面识别。扫描页拼接、图文精确穿插、公式和 PDF 表格识别不在这轮实现范围内。DOCX 正文表格能恢复 OOXML 的横向和纵向合并；旧 DOC 合并几何以及 Word 复杂编号仍受 Tika 输出能力限制，当前不保证生成原生嵌套列表。
-- Mika 可在 JVM 内提取未加密 Word 2.x 的普通保存和 FastSave 文件，并按 FIB 的语言和字符集解码正文、脚注、页眉页脚和批注。域结果、项目符号、分页和旧式单元格控制符会转为 Markdown，WordBasic 宏流不会进入检索正文；旧图形数据不能解码时保留 `[Image][ImageEnd]` 并产生 warning。加密或损坏文件返回明确错误，可再用 LibreOffice 转换后重试。DOCX 批注以独立 `### Comments` 保留作者、锚定正文和回复层级，不再伪装成普通正文；AltChunk 正文会转换为 Markdown，AltChunk 内图仍在正文位置，普通嵌入附件不递归并入正文。
+- PDF 内容流正确的多栏文档会保留阅读顺序；内容流本身错误时仍需版面识别。图片按页内纵坐标插入相邻文本行，同一图片对象重复绘制只上传/OCR 一次。PDF 表格识别仍需版面模型。DOCX 正文表格能恢复 OOXML 的横向和纵向合并；旧 DOC 在 HWPF 信息足够时恢复合并几何，异常或矛盾的单元格仍保留全部可见文字。
+- Mika 可在 JVM 内提取未加密 Word 2.x 的普通保存和 FastSave 文件，并按 FIB 的语言和字符集解码正文、脚注、页眉页脚和批注。域结果、简单 EQ 公式、嵌入对象类型、项目符号、分页和旧式单元格控制符会转为 Markdown，WordBasic 宏流不会进入检索正文；旧图形数据不能解码时保留 `[Image][ImageEnd]` 并产生 warning。加密或损坏文件返回明确错误，可再用 LibreOffice 转换后重试。DOCX 批注以独立 `### Comments` 保留作者、锚定正文和回复层级；旧 DOC 批注从 PlcfandRef 恢复作者、顺序和正文引用点附近的上下文。AltChunk 正文会转换为 Markdown，AltChunk 内图仍在正文位置，普通嵌入附件不递归并入正文。仅缺少 `[Content_Types].xml` 的常见 DOCX 包会在条目数和展开大小限制内修复；重复条目、深层恶意 XML 等仍安全失败。
 - 长文本不再经过 `Tika.parseToString()` 默认长度上限，但当前仍在内存构建完整结果；超大文件的流式处理需要后续升级。
 
 ## 验证

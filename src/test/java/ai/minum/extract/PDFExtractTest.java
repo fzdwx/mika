@@ -24,6 +24,8 @@ import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink;
 import org.apache.pdfbox.pdmodel.interactive.action.PDActionURI;
 import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.apache.pdfbox.pdmodel.interactive.form.PDTextField;
+import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
+import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.junit.jupiter.api.Test;
 
 import javax.imageio.ImageIO;
@@ -35,10 +37,12 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -67,6 +71,139 @@ class PDFExtractTest {
                 .getMarkdown();
 
         assertTrue(markdown.indexOf("left second") < markdown.indexOf("right first"), markdown);
+    }
+
+    @Test
+    void insertsPdfImageAtItsVerticalTextPositionAndProcessesRepeatedImageOnce() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            PDImageXObject image = LosslessFactory.createFromImage(document,
+                    new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB));
+            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                writeText(content, "paragraph above", 72, 700);
+                content.drawImage(image, 72, 500, 40, 40);
+                writeText(content, "paragraph below", 72, 300);
+                content.drawImage(image, 300, 100, 40, 40);
+            }
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+        AtomicInteger uploads = new AtomicInteger();
+
+        ExtractResult result = Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig().imageUploader(image -> {
+                    uploads.incrementAndGet();
+                    return "images/shared(v1).png";
+                }));
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        String markdown = result.getMarkdown();
+        int above = markdown.indexOf("paragraph above");
+        int firstImage = markdown.indexOf("[Image](images/shared(v1).png)[ImageEnd]");
+        int below = markdown.indexOf("paragraph below");
+        assertTrue(above < firstImage && firstImage < below, markdown);
+        assertEquals(2, markdown.split("\\Q[Image](images/shared(v1).png)[ImageEnd]\\E", -1).length - 1);
+        assertEquals(1, uploads.get());
+    }
+
+    @Test
+    void positionsImagesAgainstTheUpperEdgeOfANonZeroCropBox() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            page.setCropBox(new PDRectangle(0, 200, 612, 592));
+            document.addPage(page);
+            PDImageXObject image = LosslessFactory.createFromImage(document,
+                    new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB));
+            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                writeText(content, "cropped above", 72, 700);
+                content.drawImage(image, 72, 500, 40, 40);
+                writeText(content, "cropped below", 72, 300);
+            }
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        ExtractResult result = Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig().imageUploader(image -> "images/cropped.png"));
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        String markdown = result.getMarkdown();
+        assertTrue(markdown.indexOf("cropped above") < markdown.indexOf("[Image](images/cropped.png)"), markdown);
+        assertTrue(markdown.indexOf("[Image](images/cropped.png)") < markdown.indexOf("cropped below"), markdown);
+    }
+
+    @Test
+    void insertsImageByReadingPositionOnRotatedPdfPage() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            page.setRotation(90);
+            document.addPage(page);
+            PDImageXObject image = LosslessFactory.createFromImage(document,
+                    new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB));
+            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                writeText(content, "rotated above", 72, 700);
+                content.drawImage(image, 72, 500, 40, 40);
+                writeText(content, "rotated below", 72, 300);
+            }
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        ExtractResult result = Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig().imageUploader(image -> "images/rotated.png"));
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        String markdown = result.getMarkdown();
+        assertTrue(markdown.indexOf("rotated above") < markdown.indexOf("[Image](images/rotated.png)"), markdown);
+        assertTrue(markdown.indexOf("[Image](images/rotated.png)") < markdown.indexOf("rotated below"), markdown);
+    }
+
+    @Test
+    void opensPasswordProtectedPdfWhenPasswordIsConfigured() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                writeText(content, "protected body", 72, 700);
+            }
+            document.protect(new StandardProtectionPolicy("owner-secret", "reader-secret",
+                    new AccessPermission()));
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        assertTrue(Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig()).isError());
+        ExtractResult result = Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig().pdfPassword("reader-secret"));
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(result.getMarkdown().contains("protected body"), result.getMarkdown());
+    }
+
+    @Test
+    void opensCertificateEncryptedPdfWithConfiguredPrivateKey() throws Exception {
+        byte[] pdf;
+        byte[] keyStore;
+        try (var pdfInput = getClass().getResourceAsStream("/documents/mika-cert-encrypted.pdf");
+             var keyInput = getClass().getResourceAsStream("/documents/mika-test-cert.p12")) {
+            assertNotNull(pdfInput);
+            assertNotNull(keyInput);
+            pdf = pdfInput.readAllBytes();
+            keyStore = keyInput.readAllBytes();
+        }
+
+        assertTrue(Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig()).isError());
+        ExtractResult result = Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig().pdfCertificate(keyStore, "testpass", "mika-test"));
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(result.getMarkdown().contains("certificate protected body"), result.getMarkdown());
     }
 
     @Test
@@ -370,6 +507,27 @@ class PDFExtractTest {
             assertTrue(result.getMarkdown().contains("[Image](images/scan.jp2)[ImageEnd]"),
                     result.getMarkdown());
             assertTrue(result.hasImage());
+        }
+    }
+
+    @Test
+    void rasterizesJpeg2000WhenAnOcrBackendOnlyAcceptsPng() throws Exception {
+        AtomicReference<String> mime = new AtomicReference<>();
+        AtomicReference<byte[]> image = new AtomicReference<>();
+        try (var input = getClass().getResourceAsStream("/documents/tika-jpeg2000.pdf")) {
+            assertNotNull(input);
+            ExtractResult result = Mika.extract("pdf", input, ExtractConfig.defaultConfig()
+                    .imageExtractMaxSize(10 * 1024 * 1024)
+                    .ocrImageFormats(Set.of(ImageResult.Format.PNG))
+                    .ocr((bytes, type) -> {
+                        image.set(bytes);
+                        mime.set(type);
+                        return "scan text";
+                    }));
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertEquals("image/png", mime.get());
+            assertArrayEquals(new byte[]{(byte) 0x89, 'P', 'N', 'G'}, Arrays.copyOf(image.get(), 4));
         }
     }
 

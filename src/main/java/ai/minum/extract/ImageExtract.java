@@ -2,21 +2,12 @@ package ai.minum.extract;
 
 import ai.minum.Mika;
 import java.io.InputStream;
-import java.util.List;
 
 public class ImageExtract implements Extractor {
 
-    private final static String BMP = "bmp";
-    private final static String PNG = "png";
-    private final static String JPEG = "jpeg";
-    private final static String JPG = "jpg";
-    private final static String WEBP = "webp";
-    private final static List<String> SUPPORTED_MIME_TYPES = List.of(BMP, PNG, JPEG, JPG, WEBP, "gif", "tif", "tiff");
-
-
     @Override
     public boolean support(String mimeType) {
-        return SUPPORTED_MIME_TYPES.contains(mimeType);
+        return ImageResult.Format.fromInputType(mimeType) != ImageResult.Format.UNKNOWN;
     }
 
     @Override

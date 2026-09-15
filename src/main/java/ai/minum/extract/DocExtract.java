@@ -104,13 +104,34 @@ public class DocExtract extends TikaExtractor {
     }
 
     @Override
-    protected void cleanDocument(Document document, Metadata metadata, Path repeatableSource) {
+    protected boolean splitIntoLogicalSections() {
+        return true;
+    }
+
+    @Override
+    protected void cleanDocument(Document document, Metadata metadata, Path repeatableSource,
+                                 ExtractResult result) {
         cleanDocument(document, metadata);
-        if (repeatableSource == null || document.select("img").isEmpty()) {
+        if (repeatableSource == null) {
             return;
         }
         try (InputStream input = Files.newInputStream(repeatableSource);
              HWPFDocument word = new HWPFDocument(input)) {
+            try {
+                DocTableLayout.restore(document, word);
+            } catch (RuntimeException malformedTable) {
+                logger.debug("Cannot restore an old Word table layout", malformedTable);
+            }
+            // Binary Word stores annotation text separately from its main-text reference marks.
+            // Reconnect the two before Markdown conversion rather than indexing comments as body text.
+            try {
+                DocComments.restore(document, word, result);
+            } catch (RuntimeException malformedComments) {
+                logger.debug("Cannot restore old Word comment structure", malformedComments);
+            }
+            if (document.select("img").isEmpty()) {
+                return;
+            }
             List<String> descriptions = new ArrayList<>();
             for (var picture : word.getPicturesTable().getAllPictures()) {
                 try {
