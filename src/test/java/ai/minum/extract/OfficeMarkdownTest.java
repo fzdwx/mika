@@ -733,7 +733,7 @@ class OfficeMarkdownTest {
 
             assertFalse(result.isError(), result.getErrorMessage());
             assertTrue(result.getMarkdown().contains("colspan=\"2\""), result.getMarkdown());
-            assertTrue(result.getMarkdown().contains("[Image][ImageEnd]"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("[Image]disabled.png[ImageEnd]"), result.getMarkdown());
         }
     }
 
@@ -827,7 +827,8 @@ class OfficeMarkdownTest {
 
             assertFalse(result.isError(), result.getErrorMessage());
             assertEquals(1, uploads.get(), "Unused package media must not consume upload/OCR work");
-            assertEquals(1, count(result.getMarkdown(), "[Image](images/1.png)[ImageEnd]"));
+            assertEquals(1, count(result.getMarkdown(),
+                    "[Image](images/1.png)referenced.png[ImageEnd]"));
         }
     }
 
@@ -844,8 +845,7 @@ class OfficeMarkdownTest {
 
             assertFalse(result.isError(), result.getErrorMessage());
             assertEquals(0, uploads.get());
-            assertTrue(result.getMarkdown().contains("[Image][ImageEnd]"), result.getMarkdown());
-            assertFalse(result.getMarkdown().contains("limited.png"), result.getMarkdown());
+            assertTrue(result.getMarkdown().contains("[Image]limited.png[ImageEnd]"), result.getMarkdown());
             assertTrue(result.getWarnings().stream().anyMatch(warning -> warning.contains("count limit")));
         }
     }
@@ -899,7 +899,8 @@ class OfficeMarkdownTest {
 
             assertFalse(result.isError(), result.getErrorMessage());
             assertArrayEquals(earlier, uploaded.get());
-            assertEquals(1, count(result.getMarkdown(), "[Image](images/first.png)[ImageEnd]"));
+            assertEquals(1, count(result.getMarkdown(),
+                    "[Image](images/first.png)earlier.png[ImageEnd]"));
         }
     }
 
@@ -928,7 +929,8 @@ class OfficeMarkdownTest {
 
             assertFalse(result.isError(), result.getErrorMessage());
             assertTrue(result.getMarkdown().contains(literal), result.getMarkdown());
-            assertEquals(1, count(result.getMarkdown(), "[Image](images/test.png)[ImageEnd]"));
+            assertEquals(1, count(result.getMarkdown(),
+                    "[Image](images/test.png)image.png[ImageEnd]"));
         }
     }
 
@@ -1000,18 +1002,18 @@ class OfficeMarkdownTest {
     }
 
     @Test
-    void imageAlternativeTextDropsGeneratedNamesWithoutDiscardingUsefulDescriptions() {
-        assertEquals("", TikaExtractor.meaningfulAlternativeText("Picture 1", "image1.png"));
+    void imageAlternativeTextOnlyDropsBlankOrExactResourceNames() {
+        assertEquals("Picture 1", TikaExtractor.meaningfulAlternativeText("Picture 1", "image1.png"));
         assertEquals("", TikaExtractor.meaningfulAlternativeText("image1.png", "image1.png"));
-        assertEquals("", TikaExtractor.meaningfulAlternativeText(
+        assertEquals("Logo Description automatically generated", TikaExtractor.meaningfulAlternativeText(
                 "Logo\n\nDescription automatically generated", "image1.png"));
-        assertEquals("A chart rising from 10 to 20", TikaExtractor.meaningfulAlternativeText(
+        assertEquals("A chart rising from 10 to 20 Description automatically generated", TikaExtractor.meaningfulAlternativeText(
                 "A chart rising from 10 to 20\nDescription automatically generated", "image1.png"));
-        assertEquals("", TikaExtractor.meaningfulAlternativeText(
+        assertEquals("https://images.example.com/photo.jpg", TikaExtractor.meaningfulAlternativeText(
                 "https://images.example.com/photo.jpg", "image1.png"));
-        assertEquals("", TikaExtractor.meaningfulAlternativeText("IMG_256", "image1.png"));
-        assertEquals("", TikaExtractor.meaningfulAlternativeText("济南1", "image1.png"));
-        assertEquals("", TikaExtractor.meaningfulAlternativeText(
+        assertEquals("IMG_256", TikaExtractor.meaningfulAlternativeText("IMG_256", "image1.png"));
+        assertEquals("济南1", TikaExtractor.meaningfulAlternativeText("济南1", "image1.png"));
+        assertEquals("△图片来源：埃菲社", TikaExtractor.meaningfulAlternativeText(
                 "△图片来源：埃菲社", "image1.png"));
     }
 

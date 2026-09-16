@@ -223,24 +223,8 @@ public class TikaExtractor implements Extractor {
             return "";
         }
         String text = value.replace("\r\n", "\n").replace('\r', '\n').strip();
-        String compact = text.replaceAll("(?i)\\s*description automatically generated\\s*$", "")
-                .replaceAll("\\s+", " ").strip();
+        String compact = text.replaceAll("\\s+", " ").strip();
         if (imageName != null && compact.equalsIgnoreCase(imageName)) {
-            return "";
-        }
-        if (compact.matches("(?i)(?:image|picture|graphic|shape|drawing|photo|logo|图|图片|图像|形状|文本框)\\s*\\d*(?:\\.[a-z0-9]+)?")) {
-            return "";
-        }
-        if (compact.matches("(?i)[^\\s/\\\\]+\\.(?:png|jpe?g|gif|bmp|tiff?|wmf|emf|svg|webp|jp2|jpx|pict)")) {
-            return "";
-        }
-        if (compact.matches("(?i)(?:https?|file)://.*")
-                || compact.matches("(?i)[a-z]:\\\\.*")
-                || compact.matches("(?i)(?:img|dsc|微信图片)[_-]?\\d+.*")
-                || compact.matches("(?i)△?图片来源[:：].*")
-                || compact.matches("(?i)[0-9a-f]{12,}(?:[_-][a-z0-9]+)?")
-                || compact.matches("\\d{6,}(?:\\(\\d+\\))?")
-                || compact.matches("[\\p{L}_ -]{1,8}\\d{1,4}")) {
             return "";
         }
         return compact;
