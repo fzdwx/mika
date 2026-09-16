@@ -7,38 +7,16 @@ import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.regex.Pattern;
 
 /** Conservative cleanup and reading-order repair for OCR applied to embedded document images. */
 final class OcrImageQuality {
     private static final int MAX_OCR_REGIONS_PER_IMAGE = 24;
-    private static final Pattern TEACHING_SITE_WATERMARK = Pattern.compile(
-            "(?iu).*?(?:学科网|zxxk\\s*\\.\\s*com).*?");
-    private static final Pattern DECORATIVE_HEADING_PREFIX = Pattern.compile(
-            "(?iu)^[a-z](?:\\d|[+*#]){1,2}\\s*(?=\\p{IsHan})");
-    private static final Pattern ISOLATED_NOISE = Pattern.compile(
-            "^[\\p{N}\\p{P}\\p{S}\\s]{1,3}$");
 
     private OcrImageQuality() {
     }
 
     static String cleanText(String text) {
-        if (text == null || text.isBlank()) {
-            return "";
-        }
-        List<String> kept = new ArrayList<>();
-        for (String sourceLine : text.replace('\r', '\n').split("\\n+")) {
-            String line = sourceLine.strip();
-            if (line.isEmpty() || TEACHING_SITE_WATERMARK.matcher(line).matches()
-                    || ISOLATED_NOISE.matcher(line).matches()) {
-                continue;
-            }
-            line = DECORATIVE_HEADING_PREFIX.matcher(line).replaceFirst("").strip();
-            if (!line.isEmpty()) {
-                kept.add(line);
-            }
-        }
-        return String.join("\n", kept);
+        return text == null ? "" : text.strip();
     }
 
     /**

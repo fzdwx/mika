@@ -24,12 +24,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class OcrExtractionTest {
     @Test
-    void removesRetrievalNoiseFromDecorativeOcrWithoutLosingHeadings() {
-        assertEquals("教材分析\n课堂导入", OcrImageQuality.cleanText("""
-                学科网 WWW.ZXXK.COM
+    void preservesOcrTextWithoutDocumentSpecificRewrites() {
+        assertEquals("brand.example\n00\nX9Section\nA+ Introduction", OcrImageQuality.cleanText("""
+                brand.example
                 00
-                F8教材分析
-                A+ 课堂导入
+                X9Section
+                A+ Introduction
                 """));
     }
 

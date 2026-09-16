@@ -43,11 +43,6 @@ public class DocxExtract extends TikaExtractor {
         // content-control prompts (for example "Click or tap here to enter text") that are not
         // displayed in the document body and must not enter retrieval text.
         document.select("div.glossary").remove();
-        document.select("p").stream()
-                .filter(paragraph -> paragraph.text().strip().matches(
-                        "(?iu)(?:\\d+\\s*)?原创精品资源学科网独家享有版权，侵权必究！"
-                                + "|学科网[（(]北京[）)]股份有限公司"))
-                .forEach(org.jsoup.nodes.Node::remove);
         try {
             DocxComments.restore(document, repeatableSource);
         } catch (Exception e) {
