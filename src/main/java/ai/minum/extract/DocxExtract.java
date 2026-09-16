@@ -53,6 +53,16 @@ public class DocxExtract extends TikaExtractor {
             logger.warn("Failed to restore DOCX merged table cells", e);
         }
         try {
+            int recovered = DocxDeepTableText.restore(document, repeatableSource);
+            if (recovered > 0) {
+                result.addWarning("Recovered " + recovered + " paragraphs beyond the XHTML table nesting limit");
+            }
+        } catch (Exception e) {
+            // Keep Tika's safely bounded output if a deeply nested table is malformed. This
+            // supplemental pass never replaces the primary parse.
+            logger.warn("Failed to recover deeply nested DOCX table text", e);
+        }
+        try {
             DocxActiveXControls.restore(document, repeatableSource);
         } catch (Exception e) {
             // ActiveX is optional legacy content. Keep the successfully parsed Word body when a

@@ -770,6 +770,29 @@ class OfficeMarkdownTest {
     }
 
     @Test
+    void docxRecoversTextBeyondTikasNestedTableDepth() throws Exception {
+        try (XWPFDocument document = new XWPFDocument()) {
+            XWPFTableCell cell = document.createTable(1, 1).getRow(0).getCell(0);
+            cell.setText("Nested level 0");
+            var current = cell.getCTTc();
+            for (int level = 1; level < 40; level++) {
+                CTTbl nested = current.addNewTbl();
+                current = nested.addNewTr().addNewTc();
+                current.addNewP().addNewR().addNewT().setStringValue("Nested level " + level);
+            }
+
+            ExtractResult result = extract(document, ExtractConfig.defaultConfig());
+
+            assertFalse(result.isError(), result.getErrorMessage());
+            assertTrue(result.getMarkdown().contains("Nested level 39"), result.getMarkdown());
+            assertEquals(40, count(result.getMarkdown(), "Nested level "), result.getMarkdown());
+            assertTrue(result.getWarnings().stream()
+                    .anyMatch(warning -> warning.contains("beyond the XHTML table nesting limit")),
+                    result.getWarnings().toString());
+        }
+    }
+
+    @Test
     void docxKeepsMeaningfulImageAlternativeTextWithoutOcrOrUpload() throws Exception {
         try (XWPFDocument document = new XWPFDocument()) {
             XWPFRun run = document.createParagraph().createRun();
