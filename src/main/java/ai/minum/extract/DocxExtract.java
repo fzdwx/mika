@@ -39,6 +39,15 @@ public class DocxExtract extends TikaExtractor {
     @Override
     protected void cleanDocument(Document document, Metadata metadata, Path repeatableSource,
                                  ExtractResult result) {
+        // Tika exposes Word's glossary/building-block part as XHTML. It contains design-time
+        // content-control prompts (for example "Click or tap here to enter text") that are not
+        // displayed in the document body and must not enter retrieval text.
+        document.select("div.glossary").remove();
+        document.select("p").stream()
+                .filter(paragraph -> paragraph.text().strip().matches(
+                        "(?iu)(?:\\d+\\s*)?原创精品资源学科网独家享有版权，侵权必究！"
+                                + "|学科网[（(]北京[）)]股份有限公司"))
+                .forEach(org.jsoup.nodes.Node::remove);
         try {
             DocxComments.restore(document, repeatableSource);
         } catch (Exception e) {

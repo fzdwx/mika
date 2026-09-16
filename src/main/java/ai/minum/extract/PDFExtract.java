@@ -48,6 +48,9 @@ import java.util.Set;
 import java.util.StringJoiner;
 
 public class PDFExtract implements Extractor {
+    // Below 20 PostScript points (about 7 mm) OCR cannot recover useful document text reliably.
+    // This also removes the narrow monochrome strips emitted by diagram-heavy PDF producers.
+    private static final float MIN_MEANINGFUL_IMAGE_POINTS = 20.0f;
     private static final int MAX_ANNOTATIONS_PER_PAGE = 1024;
     private static final int MAX_ANNOTATION_FIELD_CHARACTERS = 32 * 1024;
     private static final int MAX_ANNOTATION_URI_CHARACTERS = 4096;
@@ -936,6 +939,7 @@ public class PDFExtract implements Extractor {
     /** Follows painted Form XObjects and inline images, including nested forms. */
     private static final class PageImages extends PDFGraphicsStreamEngine {
         private final List<ImagePlacement> placements = new ArrayList<>();
+        private final Set<COSBase> placed = Collections.newSetFromMap(new IdentityHashMap<>());
         private Point2D currentPoint = new Point2D.Float();
 
         private PageImages(PDPage page) {
@@ -946,7 +950,19 @@ public class PDFExtract implements Extractor {
         public void drawImage(PDImage image) {
             Matrix matrix = getGraphicsState().getCurrentTransformationMatrix();
             Point2D lowerLeft = matrix.transformPoint(0, 0);
+            Point2D lowerRight = matrix.transformPoint(1, 0);
+            Point2D upperLeft = matrix.transformPoint(0, 1);
             Point2D upperRight = matrix.transformPoint(1, 1);
+            double displayedWidth = lowerLeft.distance(lowerRight);
+            double displayedHeight = lowerLeft.distance(upperLeft);
+            // PDF producers frequently encode rules, glyph fragments and masks as tiny image
+            // XObjects. They have no useful OCR/display value and can otherwise create hundreds
+            // of empty markers. Keep real icons, figures and full-page scans.
+            if (displayedWidth < MIN_MEANINGFUL_IMAGE_POINTS
+                    || displayedHeight < MIN_MEANINGFUL_IMAGE_POINTS
+                    || !placed.add(image.getCOSObject())) {
+                return;
+            }
             float centerY = (float) ((lowerLeft.getY() + upperRight.getY()) / 2.0);
             float pageTop = getPage().getCropBox().getUpperRightY();
             placements.add(new ImagePlacement(image, pageTop - centerY));

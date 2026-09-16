@@ -99,11 +99,16 @@ public interface Extractor {
                 }
             }
             if (ocrImage != null) {
-                imageContent = config.getOcr().recognize(
-                        ocrImage.getData(), ocrImage.getMimeType().getMimeType());
-                if (imageContent == null) {
-                    imageContent = "";
+                List<String> columnText = new java.util.ArrayList<>();
+                for (ImageResult column : OcrImageQuality.readingOrderColumns(ocrImage)) {
+                    String recognized = config.getOcr().recognize(
+                            column.getData(), column.getMimeType().getMimeType());
+                    recognized = OcrImageQuality.cleanText(recognized);
+                    if (!recognized.isBlank()) {
+                        columnText.add(recognized);
+                    }
                 }
+                imageContent = String.join("\n\n", columnText);
             }
         }
 

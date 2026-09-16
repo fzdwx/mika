@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.net.InetSocketAddress;
@@ -16,10 +18,109 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class OcrExtractionTest {
+    @Test
+    void removesRetrievalNoiseFromDecorativeOcrWithoutLosingHeadings() {
+        assertEquals("教材分析\n课堂导入", OcrImageQuality.cleanText("""
+                学科网 WWW.ZXXK.COM
+                00
+                F8教材分析
+                A+ 课堂导入
+                """));
+    }
+
+    @Test
+    void ocrsScreenshotColumnsInReadingOrder() throws Exception {
+        BufferedImage page = new BufferedImage(1200, 500, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = page.createGraphics();
+        graphics.setColor(Color.WHITE);
+        graphics.fillRect(0, 0, page.getWidth(), page.getHeight());
+        graphics.setColor(Color.BLACK);
+        graphics.fillRect(40, 40, 300, 420);
+        graphics.fillRect(450, 40, 300, 420);
+        graphics.fillRect(860, 40, 300, 420);
+        graphics.setColor(Color.RED);
+        graphics.fillRect(0, 0, 20, 20);
+        graphics.dispose();
+        ByteArrayOutputStream png = new ByteArrayOutputStream();
+        assertTrue(ImageIO.write(page, "png", png));
+        AtomicInteger call = new AtomicInteger();
+
+        ExtractResult result = Mika.extract("png", new ByteArrayInputStream(png.toByteArray()),
+                ExtractConfig.defaultConfig().ocr((image, mime) -> "column-" + call.incrementAndGet()));
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertEquals(3, call.get());
+        assertTrue(result.getMarkdown().contains("column-1\n\ncolumn-2\n\ncolumn-3"),
+                result.getMarkdown());
+    }
+
+    @Test
+    void keepsBinaryArchivalScanAsOneOcrImage() throws Exception {
+        BufferedImage scan = new BufferedImage(1200, 800, BufferedImage.TYPE_BYTE_BINARY);
+        Graphics2D graphics = scan.createGraphics();
+        graphics.setColor(Color.WHITE);
+        graphics.fillRect(0, 0, scan.getWidth(), scan.getHeight());
+        graphics.setColor(Color.BLACK);
+        graphics.fillRect(50, 50, 300, 700);
+        graphics.fillRect(800, 50, 300, 700);
+        graphics.dispose();
+        ByteArrayOutputStream png = new ByteArrayOutputStream();
+        assertTrue(ImageIO.write(scan, "png", png));
+        AtomicInteger calls = new AtomicInteger();
+
+        ExtractResult result = Mika.extract("png", new ByteArrayInputStream(png.toByteArray()),
+                ExtractConfig.defaultConfig().ocr((image, mime) -> "scan-" + calls.incrementAndGet()));
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertEquals(1, calls.get());
+        assertTrue(result.getMarkdown().contains("scan-1"), result.getMarkdown());
+    }
+
+    @Test
+    void separatesNewspaperBodyColumnsBelowSpanningHeadline() throws Exception {
+        BufferedImage page = new BufferedImage(1400, 1200, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = page.createGraphics();
+        graphics.setColor(Color.WHITE);
+        graphics.fillRect(0, 0, page.getWidth(), page.getHeight());
+        graphics.setColor(Color.BLACK);
+        graphics.fillRect(30, 20, 1000, 120); // spanning headline
+        for (int left : new int[]{30, 360, 690, 1080}) {
+            graphics.fillRect(left, 220, 280, 940);
+        }
+        graphics.setColor(Color.RED);
+        graphics.fillRect(0, 0, 20, 20);
+        graphics.dispose();
+        ByteArrayOutputStream png = new ByteArrayOutputStream();
+        assertTrue(ImageIO.write(page, "png", png));
+        AtomicInteger calls = new AtomicInteger();
+
+        ExtractResult result = Mika.extract("png", new ByteArrayInputStream(png.toByteArray()),
+                ExtractConfig.defaultConfig().ocr((image, mime) -> "region-" + calls.incrementAndGet()));
+
+        assertFalse(result.isError(), result.getErrorMessage());
+        assertTrue(calls.get() >= 5, "headline, body columns and sidebar should be separate OCR regions");
+        assertTrue(result.getMarkdown().indexOf("region-1") < result.getMarkdown().indexOf("region-2"),
+                result.getMarkdown());
+    }
+
+    @Test
+    void removesWordGlossaryPlaceholderFromBody() throws Exception {
+        var document = org.jsoup.Jsoup.parse("""
+                <p>visible body</p>
+                <div class="glossary"><p>Klicken oder tippen Sie hier, um Text einzugeben.</p></div>
+                """);
+
+        new DocxExtract().cleanDocument(document, new org.apache.tika.metadata.Metadata(),
+                java.nio.file.Path.of("missing.docx"), ExtractResult.of());
+
+        assertEquals("visible body", document.body().text());
+    }
+
     @Test
     void pictImageReaderIsAvailable() {
         assertTrue(ImageIO.getImageReadersByFormatName("PICT").hasNext());

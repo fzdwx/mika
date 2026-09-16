@@ -131,8 +131,30 @@ class PDFExtractTest {
         int firstImage = markdown.indexOf("[Image](images/shared(v1).png)[ImageEnd]");
         int below = markdown.indexOf("paragraph below");
         assertTrue(above < firstImage && firstImage < below, markdown);
-        assertEquals(2, markdown.split("\\Q[Image](images/shared(v1).png)[ImageEnd]\\E", -1).length - 1);
+        assertEquals(1, markdown.split("\\Q[Image](images/shared(v1).png)[ImageEnd]\\E", -1).length - 1);
         assertEquals(1, uploads.get());
+    }
+
+    @Test
+    void ignoresTinyPdfImageFragmentsWithoutHidingRealImages() throws Exception {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            PDImageXObject image = LosslessFactory.createFromImage(document,
+                    new BufferedImage(20, 20, BufferedImage.TYPE_INT_RGB));
+            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                content.drawImage(image, 72, 700, 4, 30);
+                content.drawImage(image, 72, 600, 30, 30);
+            }
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        String markdown = Mika.extract("pdf", new ByteArrayInputStream(pdf),
+                ExtractConfig.defaultConfig()).getMarkdown();
+
+        assertEquals(1, markdown.split("\\Q[Image][ImageEnd]\\E", -1).length - 1, markdown);
     }
 
     @Test

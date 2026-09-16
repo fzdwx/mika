@@ -33,7 +33,7 @@ public class ExtractConfig {
     private ImageUploader imageUploader;
     private boolean uploadImage = false;
     // 最大处理图片数量 -1 为不限制
-    private Long maxHandleImageCount = 100L;
+    private Long maxHandleImageCount = 1000L;
 
     public boolean canHandleImage() {
         if (maxHandleImageCount == -1) {
@@ -52,7 +52,7 @@ public class ExtractConfig {
 
     public ExtractConfig maxHandleImageCount(Long maxHandleImageCount) {
         if (maxHandleImageCount == null) {
-            maxHandleImageCount = 100L;
+            maxHandleImageCount = 1000L;
         }
         if (maxHandleImageCount < 0) {
             maxHandleImageCount = -1L;
