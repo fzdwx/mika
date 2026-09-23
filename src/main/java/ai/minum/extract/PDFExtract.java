@@ -8,6 +8,7 @@ import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.cos.COSString;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageTree;
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDMarkedContentReference;
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDObjectReference;
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement;
@@ -37,6 +38,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -67,31 +71,48 @@ public class PDFExtract implements Extractor {
 
     @Override
     public ExtractResult doExtract(ExtractConfig config, InputStream stream) throws Exception {
+        // PDFBox keeps byte-array inputs in memory for the document lifetime. A file-backed source
+        // lets its bounded random-access cache serve large PDFs without retaining the whole input.
+        Path source = Files.createTempFile("mika-pdf-", ".pdf");
+        try {
+            Files.copy(stream, source, StandardCopyOption.REPLACE_EXISTING);
+            return extractDocument(config, source);
+        } finally {
+            try {
+                Files.deleteIfExists(source);
+            } catch (IOException cleanupError) {
+                logger.warn("Failed to delete temporary PDF file: {}", source, cleanupError);
+                source.toFile().deleteOnExit();
+            }
+        }
+    }
+
+    private ExtractResult extractDocument(ExtractConfig config, Path source) throws Exception {
         ExtractResult result = ExtractResult.of();
-        byte[] pdf = stream.readAllBytes();
-        try (PDDocument doc = loadDocument(pdf, config)) {
+        try (PDDocument doc = loadDocument(source, config)) {
             StructureContent structureContent = structureContent(doc);
             Map<Integer, List<FormValue>> formValues = formValues(doc);
             for (int i = 0; i < doc.getNumberOfPages(); i++) {
+                PDPage page = doc.getPage(i);
                 Map<Integer, String> pageActualText = structureContent.actualText().getOrDefault(
-                        doc.getPage(i).getCOSObject(), Map.of());
+                        page.getCOSObject(), Map.of());
                 // Keep content-stream order first. Tagged and multi-column PDFs commonly encode
                 // their intended reading order there, while coordinate sorting interleaves columns.
-                ExtractedPageText pageText = extractPageText(doc, i, false, pageActualText);
+                ExtractedPageText pageText = extractPageText(doc, page, false, pageActualText);
                 String text = pageText.text();
                 if (isPredominantlyRightToLeft(text) || isFragmentedExtraction(text)) {
                     // Older Arabic/Hebrew PDFs often store glyphs in visual order. PDFBox's
                     // position sorter applies bidi normalization. It also repairs PDFs whose
                     // transformed text matrices make content-stream extraction nearly character-wise.
-                    ExtractedPageText positionSorted = extractPageText(doc, i, true, pageActualText);
+                    ExtractedPageText positionSorted = extractPageText(doc, page, true, pageActualText);
                     if (isPredominantlyRightToLeft(text)
                             || hasMateriallyBetterLineStructure(text, positionSorted.text())) {
                         pageText = positionSorted;
                         text = pageText.text();
                     }
                 }
-                PageImages images = new PageImages(doc.getPage(i));
-                images.processPage(doc.getPage(i));
+                PageImages images = new PageImages(page);
+                images.processPage(page);
                 result.setHasImage(result.hasImage() || !images.placements.isEmpty());
                 List<PositionedImage> positionedImages = processPageImages(config, result, images.placements, i);
                 StringBuilder content = new StringBuilder(markdownWithPositionedImages(pageText, positionedImages));
@@ -102,7 +123,7 @@ public class PDFExtract implements Extractor {
                     }
                     content.append(pageFormValues);
                 }
-                String pageAnnotations = annotationsMarkdown(doc.getPage(i), text);
+                String pageAnnotations = annotationsMarkdown(page, text);
                 if (!pageAnnotations.isBlank()) {
                     if (!content.isEmpty()) {
                         content.append("\n\n");
@@ -111,7 +132,7 @@ public class PDFExtract implements Extractor {
                 }
                 String pageAlternatives = accessibilityDescriptionsMarkdown(
                         structureContent.alternativeText().getOrDefault(
-                                doc.getPage(i).getCOSObject(), List.of()), text);
+                                page.getCOSObject(), List.of()), text);
                 if (!pageAlternatives.isBlank()) {
                     if (!content.isEmpty()) {
                         content.append("\n\n");
@@ -124,14 +145,14 @@ public class PDFExtract implements Extractor {
         return result;
     }
 
-    private static PDDocument loadDocument(byte[] pdf, ExtractConfig config) throws IOException {
+    private static PDDocument loadDocument(Path pdf, ExtractConfig config) throws IOException {
         byte[] keyStore = config.pdfKeyStore();
         if (keyStore != null) {
-            return Loader.loadPDF(pdf, config.pdfKeyStorePassword(), new ByteArrayInputStream(keyStore),
+            return Loader.loadPDF(pdf.toFile(), config.pdfKeyStorePassword(), new ByteArrayInputStream(keyStore),
                     config.pdfKeyAlias());
         }
         return config.pdfPassword().isEmpty()
-                ? Loader.loadPDF(pdf) : Loader.loadPDF(pdf, config.pdfPassword());
+                ? Loader.loadPDF(pdf.toFile()) : Loader.loadPDF(pdf.toFile(), config.pdfPassword());
     }
 
     private List<PositionedImage> processPageImages(ExtractConfig config, ExtractResult result,
@@ -601,14 +622,12 @@ public class PDFExtract implements Extractor {
         return value.substring(0, end).stripTrailing() + "…";
     }
 
-    private static ExtractedPageText extractPageText(PDDocument document, int pageIndex,
-                                                     boolean sortByPosition,
-                                                     Map<Integer, String> structureActualText)
+    static ExtractedPageText extractPageText(PDDocument document, PDPage page,
+                                             boolean sortByPosition,
+                                             Map<Integer, String> structureActualText)
             throws IOException {
-        StructureActualTextStripper reader = new StructureActualTextStripper(structureActualText);
+        StructureActualTextStripper reader = new StructureActualTextStripper(structureActualText, page);
         reader.setSortByPosition(sortByPosition);
-        reader.setStartPage(pageIndex + 1);
-        reader.setEndPage(pageIndex + 1);
         return new ExtractedPageText(normalizeExtractedUnicode(reader.getText(document)),
                 List.copyOf(reader.lineYFromTop));
     }
@@ -859,11 +878,20 @@ public class PDFExtract implements Extractor {
     /** Adds /ActualText stored on structure elements to PDFBox's marked-content handling. */
     private static final class StructureActualTextStripper extends PDFTextStripper {
         private final Map<Integer, String> structureActualText;
+        private final PDPage targetPage;
         private final List<Float> lineYFromTop = new ArrayList<>();
         private boolean beginningOfLine = true;
 
-        private StructureActualTextStripper(Map<Integer, String> structureActualText) {
+        private StructureActualTextStripper(Map<Integer, String> structureActualText, PDPage page) {
             this.structureActualText = structureActualText;
+            this.targetPage = page;
+        }
+
+        @Override
+        protected void processPages(PDPageTree pages) throws IOException {
+            // PDFTextStripper 3.0.8 walks the complete page tree even when start/end page are set.
+            // Mika already invokes one stripper per page, so process only that page directly.
+            processPage(targetPage);
         }
 
         @Override

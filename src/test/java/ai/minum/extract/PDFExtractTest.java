@@ -1,9 +1,14 @@
 package ai.minum.extract;
 
 import ai.minum.Mika;
+import org.apache.pdfbox.cos.COSBase;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSObject;
+import org.apache.pdfbox.cos.COSObjectKey;
 import org.apache.pdfbox.cos.COSString;
+import org.apache.pdfbox.cos.ICOSParser;
+import org.apache.pdfbox.io.RandomAccessReadView;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -32,12 +37,14 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -50,6 +57,50 @@ class PDFExtractTest {
 
     private static final String COLOR_SPACE_ERROR =
             "Numbers of source Raster bands and source color space components do not match";
+
+    @Test
+    void extractsOnlyTheTargetPageWithoutResolvingOtherPageContents() throws Exception {
+        try (PDDocument document = new PDDocument()) {
+            PDPage ignored = new PDPage();
+            document.addPage(ignored);
+            try (PDPageContentStream content = new PDPageContentStream(document, ignored)) {
+                writeText(content, "ignored page", 72, 720);
+            }
+
+            PDPage target = new PDPage();
+            document.addPage(target);
+            try (PDPageContentStream content = new PDPageContentStream(document, target)) {
+                writeText(content, "target page", 72, 720);
+            }
+
+            AtomicInteger unrelatedContentReads = new AtomicInteger();
+            PDPage unrelated = new PDPage();
+            unrelated.getCOSObject().setItem(COSName.CONTENTS,
+                    new COSObject(new COSObjectKey(10_000, 0), new ICOSParser() {
+                        @Override
+                        public COSBase dereferenceCOSObject(COSObject object) {
+                            unrelatedContentReads.incrementAndGet();
+                            return null;
+                        }
+
+                        @Override
+                        public RandomAccessReadView createRandomAccessReadView(long startPosition,
+                                                                               long streamLength)
+                                throws IOException {
+                            throw new IOException("not used by this test");
+                        }
+                    }));
+            document.addPage(unrelated);
+
+            PDFExtract.ExtractedPageText page = PDFExtract.extractPageText(
+                    document, target, false, Map.of());
+
+            assertTrue(page.text().contains("target page"), page.text());
+            assertFalse(page.text().contains("ignored page"), page.text());
+            assertEquals(0, unrelatedContentReads.get(),
+                    "Extracting one page must not resolve content from later pages");
+        }
+    }
 
     @Test
     void keepsPdfImagePositionWithoutOcrOrUpload() throws Exception {
